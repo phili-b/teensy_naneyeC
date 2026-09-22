@@ -14,7 +14,7 @@ the hardware: see [How this was built with Claude](docs/built-with-claude.md).
 
 **New here?** Follow [Getting started](docs/getting-started.md): parts, wiring, flashing
 and your first image, with a troubleshooting table. The full documentation is published at
-<https://fiepfiep.github.io/teensy_naneyeC/>. [spec.md](spec.md) is the living design
+<https://phili-b.github.io/teensy_naneyeC/>. [spec.md](spec.md) is the living design
 record: decisions, measured ground truth, milestones and risks.
 
 ![The bench setup: Teensy 4.1 on a breadboard wired to the NanoBerry board](docs/images/bench-setup.jpg)
