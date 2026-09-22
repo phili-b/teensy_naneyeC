@@ -1,7 +1,13 @@
-# NanEyeC → Teensy 4.1 → Windows USB camera
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Platform: Teensy](https://img.shields.io/badge/Platform-Teensy-blue.svg)](https://www.pjrc.com/store/teensy40.html)
+[![Sensor: NanEyeC](https://img.shields.io/badge/Sensor-NanEyeC-orange.svg)](https://ams.com/)
+[![Language: C++](https://img.shields.io/badge/Language-C++-00599C.svg?logo=c%2B%2B&logoColor=white)](https://isocpp.org/)
+[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live-brightgreen.svg?logo=github&logoColor=white)](https://phili-b.github.io/teensy_naneyeC/)
+[![Logic Analyzer: Saleae](https://img.shields.io/badge/Logic%20Analyzer-Saleae-00A9E0.svg?logo=saleae&logoColor=white)](https://www.saleae.com/)
+# Teensy NanEyeC
 
 Streams 320×320 mono images from an ams-OSRAM NanEyeC (on a NanoBerry board) to a Windows PC
-through a Teensy 4.1, over the sensor's half-duplex single-ended interface (SEIM).
+through a Teensy 4.1 microcontroller, over the sensor's half-duplex single-ended interface (SEIM).
 
 ![The live viewer streaming from the NanEyeC through the Teensy: 10-bit, 0 failed rows](docs/images/viewer-live.png)
 
