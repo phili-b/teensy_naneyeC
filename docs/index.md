@@ -17,7 +17,7 @@ link, used during development and not needed to run the camera.
 
 ![The live viewer showing an image from the sensor, with statistics and a histogram](images/viewer-live2.png)
 
-*What you get: the viewer streaming from the sensor. Under the image are the frame counter
+*What you get: the viewer streaming from the sensor. There is a frame counter
 and rate, pixel statistics, the exposure and register settings, the error counters, and a
 histogram.*
 
