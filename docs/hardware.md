@@ -249,6 +249,15 @@ I_LED ≈ V_DAC / 56 Ω        0 → 44.6 mA, 10.9 µA per LSB
 Wired on 2026-09-23 (pins 3–6 and J2.9) and measured in two halves: what leaves the Teensy,
 and what arrives at the sensor as light.
 
+<figure markdown>
+![Two white LEDs lit either side of the NanEyeC sensor on the NanoBerry board](images/led-lit.jpg){ width="520" }
+<figcaption>The ring on, at a few mA. The sensor is the small package in the middle, between
+<code>C17</code> and <code>S1</code>; the lit parts are the <code>D1</code>/<code>D3</code>
+and <code>D2</code>/<code>D4</code> pairs either side of it. The light is white, so the VIS
+string is the one doing the work — an NIR-only board would look, disappointingly, like a
+board with the lights off.</figcaption>
+</figure>
+
 `uv run --with matplotlib python tools/led_figures.py capture` puts the Saleae on the four
 LED GPIOs while the firmware is told `LEDI 5`, `LED 1`, `LEDI 10`, `LED 0`:
 
