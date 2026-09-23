@@ -15,7 +15,7 @@ right) through its Raspberry Pi header. The red box is a Saleae logic analyser p
 link, used during development and not needed to run the camera.
 [Hardware](hardware.md#the-bench-in-the-photo) walks through the photo.*
 
-![The live viewer showing an image from the sensor, with statistics and a histogram](images/viewer-live.png)
+![The live viewer showing an image from the sensor, with statistics and a histogram](images/viewer-live2.png)
 
 *What you get: the viewer streaming from the sensor. Under the image are the frame counter
 and rate, pixel statistics, the exposure and register settings, the error counters, and a
