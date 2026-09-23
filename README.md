@@ -9,7 +9,7 @@
 Streams 320×320 mono images from an ams-OSRAM NanEyeC (on a NanoBerry board) to a Windows PC
 through a Teensy 4.1 microcontroller, over the sensor's half-duplex single-ended interface (SEIM).
 
-![The live viewer streaming from the NanEyeC through the Teensy: 10-bit, 0 failed rows](docs/images/viewer-live.png)
+![The live viewer streaming from the NanEyeC through the Teensy: 10-bit, 0 failed rows](docs/images/viewer-live2.png)
 
 *The live viewer, streaming from a real sensor: frame 5265, 10-bit at 12.375 MHz,
 0 failed rows. Below the image are the frame statistics, the exposure and register
@@ -33,7 +33,7 @@ uv sync --group docs
 uv run mkdocs serve      # http://127.0.0.1:8000
 ```
 
-It is published to <https://fiepfiep.github.io/teensy_naneyeC/> by
+It is published to <https://phili-b.github.io/teensy_naneyeC/> by
 `.github/workflows/docs.yml` on every push that touches the docs.
 
 ## Status
