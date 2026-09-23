@@ -576,7 +576,7 @@ were used to produce the §3 results.
 | **M3** | First frame | One frame over USB → PNG on the PC. All 102,400 pixels have start=1/stop=0. A simultaneous Saleae capture, decoded independently by `decode.py`, is **pixel-identical** to what the Teensy sent |
 | **M4** | Continuous streaming | 60 s at 12.375 MHz then 24.75 MHz: zero dropped frames, zero failed rows, and a Saleae capture showing **no SCK gap > 1 PP within a row** (i.e. none of the §3.3 pixel corruption) |
 | **M5** | Control | Exposure, gain, bit depth and SCLK settable at runtime. Measured `t_exp` matches the §5.4 formula within 1 % (verified by a light-level sweep); black level responds as predicted |
-| **M5b** | Illumination | `LED`/`LEDI` work; measured LED current matches `V_DAC / 56 Ω`; image brightness scales with commanded current |
+| **M5b** | Illumination | `LED`/`LEDI` work; measured LED current matches `V_DAC / 56 Ω`; image brightness scales with commanded current. **Done 2026-09-23**: the DAC writes were read off the wire (`0x30` + code = `I / 44.6 mA × 4095`, rail raised before the first code and dropped after the power-down) and image brightness is linear at 1.98 DN/mA from 0 to 20 mA. The current itself is still inferred from the code, not metered |
 | **M6** | Measurement readiness | Lossless recording with metadata; dark-frame/temporal-noise/FPN report; black level and full-scale characterised vs SCLK-to-MCLK mismatch. Temporal noise should land near the reference's 2.74 DN |
 | **M7** | Stretch | 49.5 MHz / 38.6 fps sustained; single-pin half-duplex (§4.3). **49.5 MHz reached 2026-09-18**: 35.3 fps sustained for 60 s, 0 failed rows (the 38.6 fps ceiling assumes no gaps between row transfers). Single-pin not attempted |
 

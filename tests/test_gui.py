@@ -142,3 +142,46 @@ def test_reader_reconnects_when_the_port_fails(monkeypatch):
     assert src.device is not old and r.connected and r.reconnects == 1
     assert signalled
     assert any("reconnected" in line for line in r.log)
+
+
+class _RecordingDevice(_FakeDevice):
+    """A device that only remembers what it was told."""
+
+    def __init__(self):
+        super().__init__(_QuietReader())
+        self.sent = []
+
+    def command(self, text):
+        self.sent.append(text)
+
+
+class _RecordingSource:
+    name = "recording device"
+    log = []
+
+    def __init__(self):
+        self.device = _RecordingDevice()
+
+    def close(self):
+        pass
+
+
+def test_stop_and_close_power_the_sensor_off():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    src = _RecordingSource()
+    win = gui.MainWindow(src, 49500000)
+    win.show()
+    app.processEvents()                       # runs the queued start
+    assert "START" in src.device.sent         # opening the GUI enables the sensor
+    src.device.sent.clear()
+
+    win._stop_device()
+    assert src.device.sent == ["STOP", "POWER 0"]
+    src.device.sent.clear()
+
+    win._start()                              # Start powers it back up
+    assert src.device.sent[-1] == "START"
+    src.device.sent.clear()
+
+    win.close()
+    assert src.device.sent[:3] == ["STOP", "LED 0", "POWER 0"]

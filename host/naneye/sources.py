@@ -77,10 +77,13 @@ class DeviceSource(Source):
                 self._log.append(packet.text)
 
     def close(self):
-        try:
-            self.device.ask("STOP")
-        except Exception:
-            pass
+        # Stop clocking, kill the light, drop the sensor's rail: a closed source leaves the
+        # board in the state it was found in.
+        for cmd in ("STOP", "LED 0", "POWER 0"):
+            try:
+                self.device.ask(cmd)
+            except Exception:  # noqa: BLE001 - closing must not raise
+                pass
         self.device.close()
 
 

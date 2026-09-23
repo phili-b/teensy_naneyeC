@@ -66,7 +66,7 @@ uv run python -m naneye.gui --snapshot gui.png                # screenshot after
 | Panel | What it shows |
 |---|---|
 | **Link** | *fps received*: frames that arrived over USB intact, per second. *fps displayed*: frames painted. Link lock state, *failed rows*, *concealed px*, *lost on PC* (left the device, never arrived intact), *dropped by device* (skipped by the firmware because the PC had not taken the previous frame yet), frame counter, SCLK |
-| **Acquisition** | Clock rate, Start, Stop, Pause, auto contrast, Save frame (16-bit PNG, raw values) |
+| **Acquisition** | Clock rate, Start, Stop, Pause, auto contrast, Save frame (16-bit PNG, raw values). *Start* powers the sensor and streams; *Stop* powers it off |
 | **Exposure and gain** | Sliders for exposure, frame delay, ramp gain and CDS gain, each read out in real units (ms, fps, ×) |
 | **Analog settings** | Sliders for the six analog fields, amber when not at the datasheet's recommended value, and a *Datasheet recommended* button. Collapsible |
 | **Illumination** | The NanoBerry's LEDs: on/off, current in 0.1 mA steps with the DAC code it becomes, and the current ceiling (`LEDMAX`, default 20 mA, hardware maximum 44.6 mA). Switching on sends the current first, because the DAC powers up at zero |
@@ -116,6 +116,12 @@ in the *Device* panel.
 The device is started only once the window and its reader are running: started earlier, it
 streamed while the window was being built and dropped frames nobody was reading (124 of
 them, in the measurement that found this).
+
+**Power follows the window.** Opening the GUI powers the sensor and starts it; *Stop* sends
+`STOP` then `POWER 0`, and closing the window sends `STOP`, `LED 0` and `POWER 0` before it
+lets go of the port. So a closed GUI leaves the bench dark, unclocked and with the sensor's
+rail down, and *Start* brings it all back — `START` power-cycles the sensor anyway. The same
+is true of any `DeviceSource`, the recorder included: closing one powers the board down.
 
 ## Lightweight viewer
 
@@ -341,7 +347,7 @@ Diagnostic commands (`LISTEN`, `PROBE`, `START REF`, `START AN`, `ALIGN`, `CLKME
 ## Tests
 
 ```bash
-uv run pytest          # 84 tests, none needing hardware
+uv run pytest          # 85 tests, none needing hardware
 ```
 
 | File | Covers |

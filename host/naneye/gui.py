@@ -637,8 +637,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log.appendPlainText(f"! {ex}")
 
     def _stop_device(self):
+        # Stop means stop: the sensor's rail goes down too, so a paused GUI leaves nothing
+        # clocking and nothing drawing current. Start powers it back up.
         self.user_stopped = True
         self._send("STOP")
+        self._send("POWER 0")
 
     def _on_reconnected(self):
         self.log.appendPlainText("! restarting the camera after reconnecting")
@@ -842,6 +845,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event):
         self.timer.stop()
         self.slow.stop()
+        # Leave the bench dark and unpowered. These are write-only, so they are safe to
+        # send while the reader thread still owns the port.
+        self._send("STOP")
+        self._send("LED 0")
+        self._send("POWER 0")
         self.reader.stop()
         self.reader.wait(2000)
         try:

@@ -47,8 +47,10 @@ Teensy GND ─────────────── J2.6, 14, 20, 25   (and
 
 ### Bench setup: connections and probe map
 
-The current bench, illumination not wired. Each signal is listed with where it enters the
-NanoBerry and where the Saleae sees it.
+Each signal is listed with where it enters the NanoBerry and where the Saleae sees it.
+The Logic Pro's eight probes are shared: D4–D6 sit either on the sensor end of the link or
+on the LED DAC, never both at once, so the link figures and the
+[LED figures](#illumination-measured) come from separate sessions.
 
 | Signal | Teensy 4.1 | NanoBerry J2 | Board net → sensor pad | Saleae, Teensy side | Saleae, board side |
 |---|---|---|---|---|---|
@@ -58,6 +60,10 @@ NanoBerry and where the Saleae sees it.
 | Sensor power enable | pin 2 | J2.33 | `Naneye_EN` → TPS71701 EN (R19 10 k pull-down) | **D1** | — |
 | Sensor supply | — | — | `VCC_SENSOR`, TPS71701 output, 3.3 V → **S1.A1** (VDDA) | — | **D4** |
 | 5 V | VUSB | J2.2 / J2.4 | `5vs` → TPS71701 input | — | — |
+| LED boost enable | pin 3 | J2.31 | `LED_VCC_ON_1` → LT3473 SHDN | **D7** | — |
+| LED DAC chip select | pin 4 | J2.36 | `LED_DAC_CS_N` → LTC2630 CS | **D4** | — |
+| LED DAC data | pin 5 | J2.38 | `LED_DAC_SDI` → LTC2630 SDI | **D5** | — |
+| LED DAC clock | pin 6 | J2.40 | `LED_DAC_SCK` → LTC2630 SCK | **D6** | — |
 | Ground | GND | J2.6, 14, 20, 25 | `GND` → **S1.A2** (VSS) | Saleae GND | Saleae GND |
 | *(unused)* | | | | D7 | |
 
@@ -238,15 +244,50 @@ I_LED ≈ V_DAC / 56 Ω        0 → 44.6 mA, 10.9 µA per LSB
     The DAC has to be programmed: `LEDI 5` then `LED 1`. The GUI's *Illumination* panel
     does this for you.
 
-The firmware and the GUI's LED controls are checked against the firmware's replies (the DAC
-codes match `I / 44.6 mA × 4095`), but the LEDs themselves have not been lit yet: pins 3–6
-and J2.9 are not wired on the bench.
+### Illumination, measured
 
-**Unresolved:** `R16` and `R17` are 0 Ω jumpers selecting the NIR and VIS strings. If both
-are fitted, the two strings share one current sink and the split follows their forward
-voltages rather than anything we control — so a commanded 10 mA is a total, unevenly shared.
-Normally only one would be fitted. Check visually and write down which; it changes nothing
-in the firmware but it changes what the numbers mean.
+Wired on 2026-09-23 (pins 3–6 and J2.9) and measured in two halves: what leaves the Teensy,
+and what arrives at the sensor as light.
+
+`uv run --with matplotlib python tools/led_figures.py capture` puts the Saleae on the four
+LED GPIOs while the firmware is told `LEDI 5`, `LED 1`, `LEDI 10`, `LED 0`:
+
+![The DAC writes on the wire: the whole sequence, and one 24-bit frame bit by bit](images/led-dac-write.png)
+
+Three writes, which is exactly three: the DAC is only written when the light is actually on,
+so `LEDI 5` before `LED 1` changes nothing on the wire and is applied by the enable. The
+frames decode as `0x301CB0` and `0x303950` — command `0x30`, write and update, codes 459 and
+917 — and `0x400000`, power down. Those codes are `I / 44.6 mA × 4095` to the LSB. The boost
+rail goes up before the first code and down after the power-down, so the LEDs never see an
+un-programmed DAC.
+
+| Measured | Value | Part's limit |
+|---|---|---|
+| SCK | 4.0 MHz, 116 ns high | 50 MHz |
+| SDI setup before the rising edge | ≥100 ns | 8 ns |
+| CS_N low | 6.2 µs per write | — |
+
+Comfortable by a factor of twelve, which is what happens when you bit-bang three GPIOs with
+100 ns delays and do not think hard about it. There is no reason to make it faster: even at
+this rate a write costs 6 µs, and the firmware only does it between frames.
+
+`tools/led_figures.py sweep` then uses the sensor as its own photometer — fixed 25 ms
+exposure, LED current stepped from 0 to 20 mA:
+
+![Mean image level against LED current, and what the ring lights up](images/led-response.png)
+
+**1.98 DN per mA, on a straight line** through all seven points. The difference image on the
+right is the honest one: the ring is a 1 mm² sensor's worth of light, so it lifts what is
+close to the board and does almost nothing to the background. At the bench's ambient level
+20 mA is a 4 % lift — useful for controlled measurement, not a flash.
+
+!!! note "Which string is fitted"
+    `R16` and `R17` are 0 Ω jumpers selecting the NIR (`D1`/`D2`, SFH 4053) and VIS
+    (`D3`/`D4`, DURIS S2) strings. The light is **visible** to the eye, so the VIS string is
+    at least fitted and lit. If both jumpers are fitted the two strings share one current
+    sink and split the current by their forward voltages, so a commanded 10 mA is a total,
+    unevenly shared. Worth checking visually and writing down; it changes nothing in the
+    firmware, only what the number means.
 
 ## Bring-up
 
@@ -261,7 +302,7 @@ defined in the [design record](design.md) (spec.md §9).
 | M2 | the sensor answers with training patterns | done |
 | M3 | a complete, valid frame | done, 0 failed rows |
 | M4 | continuous streaming without loss | done: 10 minutes at 49.5 MHz, nothing lost (the Saleae no-gap-within-a-row check is still to do) |
-| M5 | exposure control | exposure done; LED illumination not yet tested |
+| M5 | exposure control | done: exposure linear 1.3–102 ms, illumination linear 0–20 mA |
 | M6 | measurement readiness: dark frames, noise | not started |
 
 What it took to get to first light, including three faults that looked like sensor problems
@@ -270,7 +311,7 @@ and were not, is in [First light](#first-light-what-it-took-2026-09-18) below.
 ### M0 — before the camera is connected
 
 ```bash
-uv run pytest                                     # 84 tests
+uv run pytest                                     # 85 tests
 uv run --group firmware python -m platformio run -d firmware -t upload
 ```
 
@@ -454,8 +495,10 @@ print(len(idx), "gaps over 1 us")
 
 Sweep `EXP` and confirm measured brightness tracks the
 [exposure formula](seim.md#exposure) within 1 %. Sweep `LEDI` and confirm brightness tracks
-commanded current; measure the actual LED current against `V_DAC / 56 Ω` while you are
-there.
+commanded current. Both done; see [Illumination, measured](#illumination-measured). What is
+still on trust is the current itself: the DAC code is verified on the wire and the light is
+verified to be proportional to it, but nobody has put a meter in series with `R11` to
+confirm that 10 mA of command is 10 mA of LED.
 
 ### M6 — measurement readiness
 

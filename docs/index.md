@@ -31,8 +31,8 @@ histogram.*
 | Error handling | sampling point measured at every start; broken pixel words detected and concealed |
 | Exposure control | verified: brightness follows exposure linearly from 1.3 to 102 ms |
 | Watchdog | hardware watchdog resets a hung Teensy within 2 s |
-| Illumination (the board's LEDs) | firmware and GUI controls done; the LEDs are not wired on the bench yet |
-| Host software | PyQt6 camera GUI, recorder, Python API; 84 automated tests, no hardware needed |
+| Illumination (the board's LEDs) | **working**: DAC writes verified on the wire, image brightness linear at 1.98 DN/mA to 20 mA |
+| Host software | PyQt6 camera GUI, recorder, Python API; 85 automated tests, no hardware needed |
 
 ## Where to go
 
@@ -90,7 +90,7 @@ doc/                    NOT tracked: datasheets, schematic, reference capture
 firmware/               PlatformIO project for the Teensy 4.1
 host/naneye/            Python package: decoder, transport, viewer, recorder, Saleae client
 tools/                  reference-capture decoder, logic-analyser bring-up tools
-tests/                  84 tests, none needing hardware
+tests/                  85 tests, none needing hardware
 ```
 
 ## Building these docs

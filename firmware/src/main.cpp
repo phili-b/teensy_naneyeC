@@ -258,8 +258,10 @@ static void handle_command(char* line) {
                   (measured && err_ppm > -20000 && err_ppm < 5000) ? "PASS" : "FAIL");
         }
     } else if (!strcmp(tok[0], "POWER")) {
-        seim::power(parse_u32(tok[1], 1) != 0);
-        reply("POWER %d", seim::powered() ? 1 : 0);
+        // A bare POWER only reports. It used to default to 1, so asking whether the sensor
+        // was off turned it on -- which is a poor answer to a question.
+        if (n > 1) seim::power(parse_u32(tok[1], 1) != 0);
+        reply("POWER %d%s", seim::powered() ? 1 : 0, n > 1 ? "" : "  (POWER 0|1 to change)");
     } else if (!strcmp(tok[0], "CLK")) {
         const ClockSetting& c = seim::set_clock(parse_u32(tok[1], 12375000u));
         reply("CLK %lu Hz  sckdiv=%u mclk_mode=%u high_speed=%u%s",
