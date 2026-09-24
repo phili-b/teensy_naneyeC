@@ -206,6 +206,7 @@ def main(argv=None):
         "exposure_us": round(last.exposure_us(), 3),
         "cfg0": f"0x{last.cfg0:04X}",
         "cfg1": f"0x{last.cfg1:04X}",
+        "cfa": last.cfa,          # MONO, or the Bayer pattern the frames carry
     }
     reader = getattr(getattr(source, "device", None), "reader", None)
     if reader is not None:

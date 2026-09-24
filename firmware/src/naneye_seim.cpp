@@ -648,8 +648,12 @@ bool auto_sample() { return s_auto_sample; }
 // first pixel's start bit, so the lock is on row 1: a run of about 96 alternating bits
 // (8 x 0x555, ending in 1) broken by two 1s -- the second is pixel 0's start bit. The row
 // after that is then checked for its 8 training words before anything is trusted.
+static uint32_t s_lock_false_candidates = 0;
+
 static bool lock_row_phase() {
-    constexpr uint32_t MAX_SEARCH_ROWS = 48;  // training is ~3 rows long
+    // Long enough for the longest training seen on any module: the mono part sends about
+    // 3 rows' worth, the colour part about 6, and the search costs nothing once it hits.
+    constexpr uint32_t MAX_SEARCH_ROWS = 48;
     uint32_t last = 2;                      // no previous bit yet
     uint32_t run = 0;                       // alternations in the current run
     bool seen_long = false;                 // the first frame's long training run
@@ -675,7 +679,16 @@ static bool lock_row_phase() {
                         s_rx.disable();
                         return false;
                     }
-                    if (count_training(s_row[0], WORD_TRAINING) < TRAINING_PP) return false;
+                    if (count_training(s_row[0], WORD_TRAINING) < TRAINING_PP) {
+                        // A false candidate: some other pair of equal bits inside the
+                        // training. We are still on a row boundary, so keep looking from
+                        // here rather than failing the whole start, which is what this
+                        // used to do -- one unlucky bit pattern and nothing streamed.
+                        s_lock_false_candidates++;
+                        last = 2;
+                        run = 0;
+                        break;
+                    }
                     // The first frame is thrown away, so use some of it to check the
                     // chosen sampling point on real pixel data before trusting it.
                     const uint32_t verify = VERIFY_ROWS < HEIGHT - 1 - next_row
@@ -767,8 +780,16 @@ static bool start_like_reference(Config1 c1, bool require_sensor) {
     return true;
 }
 
+constexpr uint32_t START_ATTEMPTS = 3;
+static uint32_t s_start_attempts = 0;
+
+uint32_t start_attempts() { return s_start_attempts; }
+uint32_t lock_false_candidates() { return s_lock_false_candidates; }
+
 bool start(bool require_sensor, bool an_sequence) {
     s_streaming = false;
+    s_start_attempts = 1;
+    s_lock_false_candidates = 0;
     s_presync_training = 0;
     // Both sequences need a sensor fresh from power-on reset.
     if (s_powered) power(false);
@@ -779,7 +800,24 @@ bool start(bool require_sensor, bool an_sequence) {
     c1.mclk_mode = s_clock->mclk_mode;
     c1.high_speed = s_clock->high_speed;
 
-    if (!an_sequence) return start_like_reference(c1, require_sensor);
+    if (!an_sequence) {
+        // Locking depends on catching one transition in one pass of the first frame. If it
+        // misses, the only way back to a known state is another power-on reset, so try a
+        // few times before giving up on the sensor.
+        for (uint32_t attempt = 0; attempt < START_ATTEMPTS; attempt++) {
+            if (attempt) {
+                power(false);
+                power(true);
+                s_presync_training = 0;
+            }
+            if (start_like_reference(c1, require_sensor)) {
+                s_start_attempts = attempt + 1;
+                return true;
+            }
+        }
+        s_start_attempts = START_ATTEMPTS;
+        return false;
+    }
 
     // AN000611's single-write sequence, kept for comparison only. On hardware it is not
     // reliable: some starts see no pre-sync at all, and when it does start, the phase count

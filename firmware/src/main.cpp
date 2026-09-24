@@ -380,8 +380,11 @@ static void handle_command(char* line) {
         }
         if (seim::start(!s_force_start, an)) {
             s_run = true;
-            reply("START ok  streaming  (pre-sync training %lu/%u)%s",
+            reply("START ok  streaming  (pre-sync training %lu/%u, attempt %lu, "
+                  "%lu false lock candidates)%s",
                   (unsigned long)seim::presync_training(), (unsigned)ROW_PP,
+                  (unsigned long)seim::start_attempts(),
+                  (unsigned long)seim::lock_false_candidates(),
                   s_force_start ? "  FORCED: frames are not from a verified sensor" : "");
             report_sampling();
         } else {

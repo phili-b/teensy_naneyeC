@@ -322,6 +322,27 @@ transition comes early, because the search stops when it finds it.
 The lesson is the same one as the very first bring-up: a start-up constant measured on one
 sample of hardware is not a constant, it is a measurement of that sample.
 
+Two more things came out of the same failure, because the lock was brittle in a second way:
+a false candidate — any pair of equal bits inside the training that looked like a row start
+— made it give up on the whole start instead of carrying on looking. It now keeps searching,
+and `START` retries the whole power-on sequence up to three times before reporting no
+sensor. After that:
+
+| Clock | Starts | Failed rows |
+|---|---|---|
+| 12.375 MHz | 10/10 | 0 |
+| 24.75 MHz | 10/10 | 0 |
+| 49.5 MHz | 10/10, and 10/10 again with the LED on at 20 mA | 0 |
+
+!!! warning "Fixed, and not fully explained"
+    `START ok` now reports which attempt succeeded and how many false candidates it stepped
+    over. Across those 40 starts both numbers were always **1** and **0** — so neither of
+    the two new recovery paths was actually used, yet the same firmware minus those changes
+    failed ten times out of ten an hour earlier under what looked like the same conditions.
+    Something else about the sensor's state differs between those runs and has not been
+    identified. The counters are in the reply so that the next failure says more than the
+    last one did.
+
 !!! note "The first row of every frame"
     Row 0 reads about 80 DN darker than the rest, and its first few pixels come back
     saturated (`1022`) where the row's training pattern runs into pixel 0's start bit. It

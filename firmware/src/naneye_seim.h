@@ -113,6 +113,11 @@ uint16_t config1();
 // reference host did.
 bool start(bool require_sensor = true, bool an_sequence = false);
 
+// How many power-on attempts the last start needed, and how many false row-lock
+// candidates it stepped over. Both are 0 until the first start.
+uint32_t start_attempts();
+uint32_t lock_false_candidates();
+
 // Training-pattern words seen in the INITIAL PRE-SYNC row by the most recent start(),
 // out of naneye::ROW_PP. 0xAAA and 0x555 both count: the alternating pattern reads as one
 // or the other depending on whether the word phase is off by an odd number of bits.

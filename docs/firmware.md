@@ -273,6 +273,16 @@ would look. With 500 per frame at 49.5 MHz, every one was detected and concealed
 
 `SELFTEST` checks concealment too, on the golden row with one word broken on purpose.
 
+## When the row lock misses
+
+Locking has one chance per power-on: it has to catch the moment the first frame's training
+turns into pixels, in a single pass. Three things make that survivable. The search covers 48
+rows, because how long the training lasts is a property of the module and not a constant. A
+candidate that fails its check is stepped over rather than fatal. And `START` will
+power-cycle and try the whole sequence up to three times before it reports no sensor. The
+`START ok` reply says which attempt won and how many false candidates it passed, so a start
+that needed help says so instead of looking identical to one that did not.
+
 ## Telling the firmware which sensor is fitted
 
 A mono and a colour NanEyeC are indistinguishable on the link, so `CFA MONO|BGGR|GBRG|GRBG|RGGB`
