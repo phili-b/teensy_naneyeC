@@ -140,6 +140,25 @@ The **Mono / RGB** switch decides what you look at. Mono shows the raw mosaic as
 arrives, which is what you want when measuring; RGB runs the ISP. The switch follows the
 device until you touch it, after which it is yours. ++c++ toggles it.
 
+### What the camera comes up as
+
+The defaults are the ones that suit the colour sensor on this bench, and they live in one
+dictionary, `gui.DEFAULTS`:
+
+| | | Why |
+|---|---|---|
+| Clock | 12.375 MHz | the slowest of the three, and so the longest exposure the sensor allows |
+| Exposure | maximum (`rows_in_reset = 0`) | the colour part sees little light; sent once, on the first frame that says where the registers are, and never again |
+| Auto contrast | **off** | the ISP has a black level and a tone curve now, and a stretch on top of them fights both |
+| Mode | RGB, BGGR | still switchable, and still overridden by a device that reports mono |
+| Black level | 170 DN | measured on this sensor, not a datasheet figure |
+| White balance | grey world, every frame | |
+| Colour matrix | saturation | uncalibrated, and the picture looks right |
+| Gamma | sRGB | |
+
+Every one of them is a control in the window; this is only where they start. `--clock`
+overrides the first.
+
 ### The pipeline
 
 ```

@@ -29,6 +29,22 @@ from . import color, isp as isp_mod, protocol, regs
 from .accounting import FrameAccounting
 from .sources import _decode, open_source
 
+# What the camera comes up as, chosen on the bench for the colour sensor: the slowest
+# clock (the longest exposure it allows), the exposure slider at its maximum, no auto
+# contrast, and the ISP set the way the picture actually looks right. Every one of these is
+# a control in the window; this is only where they start.
+DEFAULTS = {
+    "clock_hz": 12375000,
+    "auto_contrast": False,
+    "max_exposure": True,      # rows_in_reset = 0, the longest the sensor allows
+    "rgb": True,
+    "mosaic": "BGGR",
+    "black_level": 170.0,
+    "white_balance": "auto",   # grey world, every frame
+    "matrix": "saturation",
+    "gamma": None,             # None is sRGB, see isp.GAMMAS
+}
+
 CLOCKS = ((49500000, "49.5 MHz  (~35 fps)"), (24750000, "24.75 MHz  (~18 fps)"),
           (12375000, "12.375 MHz  (~8 fps)"))
 SETTLE_S = 0.15          # a slider must be still this long before its value is sent
@@ -323,15 +339,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.reader = FrameReader(source)
         self.painted = collections.deque(maxlen=400)
         self.paused = False
-        self.auto_contrast = True
+        self.auto_contrast = DEFAULTS["auto_contrast"]
         # Colour: the switch decides what is shown, the pattern decides how it is read. The
         # device's own answer (from the frame header) is followed until the switch is touched.
-        self.rgb_mode = False
+        self.rgb_mode = DEFAULTS["rgb"]
         self.rgb_chosen = False      # the user worked the switch: stop following the header
-        self.cfa = color.PATTERNS[0]
+        self.cfa = DEFAULTS["mosaic"]
         self.wb_gains = None
         self.header_cfa = protocol.Header().cfa
-        self.isp = isp_mod.Isp(pattern=self.cfa)
+        self.header_seen = False
+        self.defaults_sent = False   # the one-shot exposure default
+        self.isp = isp_mod.Isp(pattern=self.cfa, black_level=DEFAULTS["black_level"],
+                               matrix=DEFAULTS["matrix"], gamma=DEFAULTS["gamma"])
         self.header = None
         self.img = None
         self.controls_ready = False
@@ -452,7 +471,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_start.clicked.connect(self._start)
         self.btn_stop.clicked.connect(self._stop_device)
         self.chk_auto = QtWidgets.QCheckBox("Auto contrast")
-        self.chk_auto.setChecked(True)
+        self.chk_auto.setChecked(DEFAULTS["auto_contrast"])
         self.chk_auto.toggled.connect(lambda on: setattr(self, "auto_contrast", on))
         self.btn_pause = QtWidgets.QPushButton("Pause")
         self.btn_pause.setCheckable(True)
@@ -482,24 +501,29 @@ class MainWindow(QtWidgets.QMainWindow):
         for i, b in enumerate((self.sw_mono, self.sw_rgb)):
             b.setCheckable(True)
             group.addButton(b, i)
-        self.sw_mono.setChecked(True)
+        (self.sw_rgb if DEFAULTS["rgb"] else self.sw_mono).setChecked(True)
         self.sw_rgb.toggled.connect(self._rgb_toggled)
 
         self.cfa_box = QtWidgets.QComboBox()
         for p in color.PATTERNS:
             self.cfa_box.addItem(p, p)
+        self.cfa_box.setCurrentIndex(color.PATTERNS.index(DEFAULTS["mosaic"]))
         self.cfa_box.currentIndexChanged.connect(self._cfa_changed)
 
         self.wb_box = QtWidgets.QComboBox()
         self.wb_box.addItem("as measured", None)
         self.wb_box.addItem("grey world (once)", "once")
         self.wb_box.addItem("grey world (every frame)", "auto")
+        self.wb_box.setCurrentIndex(
+            [self.wb_box.itemData(i) for i in range(self.wb_box.count())]
+            .index(DEFAULTS["white_balance"]))
         self.wb_box.currentIndexChanged.connect(self._wb_changed)
 
         self.black = QtWidgets.QSpinBox()
         self.black.setRange(0, 512)
         self.black.setSingleStep(4)
         self.black.setSuffix(" DN")
+        self.black.setValue(int(DEFAULTS["black_level"]))
         self.black.valueChanged.connect(
             lambda v: setattr(self.isp, "black_level", float(v)))
         self.btn_black = QtWidgets.QPushButton("from frame")
@@ -510,13 +534,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.gamma_box = QtWidgets.QComboBox()
         for name, value in isp_mod.GAMMAS.items():
             self.gamma_box.addItem(name, value)
-        self.gamma_box.setCurrentIndex(list(isp_mod.GAMMAS).index("2.2"))
+        self.gamma_box.setCurrentIndex(
+            list(isp_mod.GAMMAS.values()).index(DEFAULTS["gamma"]))
         self.gamma_box.currentIndexChanged.connect(
             lambda: setattr(self.isp, "gamma", self.gamma_box.currentData()))
 
         self.ccm_box = QtWidgets.QComboBox()
         for name in isp_mod.MATRICES:
             self.ccm_box.addItem(name, name)
+        self.ccm_box.setCurrentIndex(list(isp_mod.MATRICES).index(DEFAULTS["matrix"]))
         self.ccm_box.currentIndexChanged.connect(
             lambda: setattr(self.isp, "matrix", self.ccm_box.currentData()))
 
@@ -563,8 +589,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _follow_header_cfa(self, header):
         """Adopt what the device says its sensor is, until the switch is touched."""
         cfa = header.cfa
-        if cfa == self.header_cfa:
+        if cfa == self.header_cfa and self.header_seen:
             return
+        self.header_seen = True
         self.header_cfa = cfa
         if cfa != color.MONO:
             self.cfa_box.blockSignals(True)
@@ -579,8 +606,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_cfa_caption()
 
     def _update_cfa_caption(self):
-        said = ("the device says MONO" if self.header_cfa == color.MONO
-                else f"the device says {self.header_cfa}")
+        said = (f"the device says {self.header_cfa}" if self.header_seen
+                else "no frame yet")
         if not self.rgb_mode:
             what = "raw mosaic, black level and gamma only"
         else:
@@ -833,6 +860,14 @@ class MainWindow(QtWidgets.QMainWindow):
             s.setEnabled(self.device is not None)
         self.device_cfg = self.sent_cfg = self.pending_cfg = (header.cfg0, header.cfg1)
         self.controls_ready = True
+        if DEFAULTS["max_exposure"] and not self.defaults_sent and self.device is not None:
+            # rows_in_reset = 0 is the longest exposure the sensor offers. Done once, on the
+            # first frame that says what the registers hold, and never again: after that the
+            # slider is whatever it was left at.
+            self.defaults_sent = True
+            self.sliders[0].set_field_value(0)
+            self._slider_moved()
+            self.pending_since = 0.0
         if self.restore_cfg is not None:
             wanted = regs.unpack(*self.restore_cfg)
             for s in self.sliders:
@@ -1057,7 +1092,7 @@ def main(argv=None):
     ap.add_argument("--source", default="auto",
                     help="'auto' (default), a COM port, 'replay', a .csv capture, or a "
                          "recorded stream file")
-    ap.add_argument("--clock", type=int, default=49500000,
+    ap.add_argument("--clock", type=int, default=DEFAULTS["clock_hz"],
                     help="SCLK: 49500000 (default, ~35 fps), 24750000 or 12375000")
     ap.add_argument("--depth", type=int, default=10, choices=(8, 10))
     ap.add_argument("--fps", type=float, default=35.0, help="replay rate")

@@ -193,19 +193,21 @@ def test_the_colour_switch_turns_the_mosaic_into_rgb():
 
     src = _RecordingSource()
     win = gui.MainWindow(src, 49500000)
+    win.wb_box.setCurrentIndex(0)               # "as measured": no grey world in the way
+    win.ccm_box.setCurrentIndex(0)              # and no colour matrix either
     raw = np.full((8, 8), 500, np.uint16)
     raw[color.masks("BGGR", raw.shape)["R"]] = 900
 
     shown, _ = win._to_display(raw)
-    assert shown.ndim == 2                      # mono: the raw mosaic, as received
-
-    win.sw_rgb.setChecked(True)
-    shown, _ = win._to_display(raw)
-    assert shown.shape == (8, 8, 3)             # RGB: demosaiced
+    assert shown.shape == (8, 8, 3)             # RGB by default: demosaiced
     assert shown[4, 4, 0] > shown[4, 4, 2]      # red is the bright channel
 
     win.sw_mono.setChecked(True)
-    assert win._to_display(raw)[0].ndim == 2
+    shown, _ = win._to_display(raw)
+    assert shown.ndim == 2                      # mono: the raw mosaic, as received
+
+    win.sw_rgb.setChecked(True)
+    assert win._to_display(raw)[0].shape == (8, 8, 3)
     win.close()
 
 
@@ -214,9 +216,9 @@ def test_the_gui_follows_the_mosaic_the_device_reports():
     from naneye import color
 
     win = gui.MainWindow(_RecordingSource(), 49500000)
-    assert not win.rgb_mode                                  # nothing said yet: mono
+    assert win.rgb_mode and win.cfa == "BGGR"                # the default, before any frame
 
-    win._follow_header_cfa(header(1))                        # a mono device stays mono
+    win._follow_header_cfa(header(1))                        # a mono device turns it off
     assert not win.rgb_mode
 
     colour = header(2)
@@ -228,4 +230,35 @@ def test_the_gui_follows_the_mosaic_the_device_reports():
     win._follow_header_cfa(header(3))
     win._follow_header_cfa(colour)
     assert not win.rgb_mode
+    win.close()
+
+
+def test_the_camera_comes_up_on_the_bench_defaults():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    from naneye import isp as isp_mod
+
+    src = _RecordingSource()
+    win = gui.MainWindow(src, gui.DEFAULTS["clock_hz"])
+    assert not win.auto_contrast and not win.chk_auto.isChecked()
+    assert win.rgb_mode and win.sw_rgb.isChecked()
+    assert win.cfa_box.currentData() == "BGGR" and win.isp.pattern == "BGGR"
+    assert win.black.value() == 170 and win.isp.black_level == 170
+    assert win.wb_box.currentData() == "auto"
+    assert win.ccm_box.currentData() == "saturation" and win.isp.matrix == "saturation"
+    assert win.gamma_box.currentData() is None and win.isp.gamma is None   # sRGB
+    assert win.clock.currentData() == 12375000
+
+    # The longest exposure is sent once, when the first frame says where the registers are.
+    app.processEvents()
+    src.device.sent.clear()
+    short = protocol.Header(frame_counter=1, cfg0=60 << 8)   # rows_in_reset = 60
+    win._init_controls(short)
+    win._flush_register_writes()
+    assert win.sliders[0].field_value() == 0          # rows_in_reset = 0: the longest
+    assert any(c.startswith("REG 0") for c in src.device.sent), src.device.sent
+    src.device.sent.clear()
+    win._init_controls(short)                         # a restart must not redo it
+    win._flush_register_writes()
+    assert win.defaults_sent and win.sliders[0].field_value() == 60
+    assert not src.device.sent
     win.close()
