@@ -1,11 +1,13 @@
 # NanEyeC on Teensy 4.1
 
-This project turns an **ams-OSRAM NanEyeC**, a 1 mm² camera sensor in mono or colour, into
-a USB camera for a Windows PC. The sensor sits on an ams **NanoBerry** evaluation board, a **Teensy 4.1**
-microcontroller talks to it, and the PC receives 320 × 320 monochrome images at up to
-35 frames per second, with Python tools to view and record them.
+This project turns an **ams-OSRAM NanEyeC**, a 1 mm² camera sensor, into a USB camera for a
+Windows PC. The sensor sits on an ams **NanoBerry** evaluation board, a **Teensy 4.1**
+microcontroller talks to it, and the PC receives 320 × 320 images at up to 35 frames per
+second, with Python tools to view and record them. Both the mono and the colour part work;
+the colour one streams its Bayer mosaic and the PC demosaics it.
 
-Frames keep the sensor's full 10-bit resolution. Every frame carries its own exposure,
+Frames keep the sensor's full 10-bit resolution, and what is recorded is always the raw
+mosaic, never a processed picture. Every frame carries its own exposure,
 clock and error counters, and a lost or damaged frame is always reported, never hidden.
 
 ![The bench setup: Teensy 4.1 on a breadboard wired to the NanoBerry board, with a Saleae logic analyser](images/bench-setup.jpg)
@@ -15,11 +17,12 @@ right) through its Raspberry Pi header. The red box is a Saleae logic analyser p
 link, used during development and not needed to run the camera.
 [Hardware](hardware.md#the-bench-in-the-photo) walks through the photo.*
 
-![The live viewer showing an image from the sensor, with statistics and a histogram](images/viewer-live2.png)
+![The camera GUI streaming a colour image of a room, with the link statistics, the colour and ISP controls, exposure and illumination panels, and a histogram](images/gui.png)
 
-*What you get: the viewer streaming from the sensor. There is a frame counter
-and rate, pixel statistics, the exposure and register settings, the error counters, and a
-histogram.*
+*What you get: the GUI streaming from a colour NanEyeC — demosaiced, white balanced and
+gamma corrected on the way to the screen, at 183 ms exposure and 12.375 MHz. The panels give
+the link and error counters, the Mono/RGB switch and the ISP, exposure and gain, the LED
+current, the sensor's registers, and a histogram of the raw 10-bit values.*
 
 ## Status
 

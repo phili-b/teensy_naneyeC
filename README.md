@@ -6,14 +6,15 @@
 [![Logic Analyzer: Saleae](https://img.shields.io/badge/Logic%20Analyzer-Saleae-00A9E0.svg?logo=saleae&logoColor=white)](https://www.saleae.com/)
 # Teensy NanEyeC
 
-Streams 320×320 mono images from an ams-OSRAM NanEyeC (on a NanoBerry board) to a Windows PC
-through a Teensy 4.1 microcontroller, over the sensor's half-duplex single-ended interface (SEIM).
+Streams 320×320 images, mono or colour, from an ams-OSRAM NanEyeC (on a NanoBerry board) to a
+Windows PC through a Teensy 4.1 microcontroller, over the sensor's half-duplex single-ended
+interface (SEIM).
 
-![The live viewer streaming from the NanEyeC through the Teensy: 10-bit, 0 failed rows](docs/images/viewer-live2.png)
+![The camera GUI streaming a colour image from the NanEyeC through the Teensy: 10-bit, 0 failed rows](docs/images/gui.png)
 
-*The live viewer, streaming from a real sensor: frame 5265, 10-bit at 12.375 MHz,
-0 failed rows. Below the image are the frame statistics, the exposure and register
-settings, and the histogram.*
+*The GUI, streaming from a colour sensor: 10-bit at 12.375 MHz, 0 failed rows, 0 frames lost.
+The mosaic is demosaiced, white balanced and gamma corrected on the host in a few
+milliseconds a frame. Below the image is the histogram of the raw values.*
 
 Developed and brought up on the bench by Claude, working in Claude Code with a person on
 the hardware: see [How this was built with Claude](docs/built-with-claude.md).

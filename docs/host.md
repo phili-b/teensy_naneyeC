@@ -63,6 +63,9 @@ uv run python -m naneye.gui --snapshot gui.png                # screenshot after
 
 ![The camera GUI](images/gui.png)
 
+*Streaming from a colour sensor at 12.375 MHz. Everything below the image is described in
+the table.*
+
 | Panel | What it shows |
 |---|---|
 | **Link** | *fps received*: frames that arrived over USB intact, per second. *fps displayed*: frames painted. Link lock state, *failed rows*, *concealed px*, *lost on PC* (left the device, never arrived intact), *dropped by device* (skipped by the firmware because the PC had not taken the previous frame yet), frame counter, SCLK |
