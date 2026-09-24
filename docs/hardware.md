@@ -222,6 +222,16 @@ default against a 44.6 mA hardware maximum, so the USB budget is safe. Cycling
 
 ## Illumination
 
+<figure markdown>
+![The NanEyeC on the tip of its flex, a black cube about a millimetre across, with a lit white LED either side of it](images/sensor-head.jpg){ width="360" }
+<figcaption>The camera itself: the black cube in the middle is the NanEyeC, roughly 1 mm
+square, on the tip of a flex with an illumination LED either side of it, both lit at a few
+milliamps. The two tracks running past it are labelled <code>SDAT</code> and
+<code>SCLK</code> — the whole interface is those two wires plus power and ground. This is
+the colour part, on the flex module that plugs into the NanoBerry; the board's own LED
+driver supplies the light.</figcaption>
+</figure>
+
 VIS (`D3`/`D4`, DURIS S2) and NIR (`D1`/`D2`, SFH 4053) strings in parallel between
 `+VCC_LED` and `LED_CATHODE`, fed by an LT3473 boost, sunk by an LT3092 whose set point
 comes from an LTC2630 12-bit DAC.
