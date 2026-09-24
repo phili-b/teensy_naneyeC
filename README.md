@@ -43,7 +43,8 @@ It is published to <https://phili-b.github.io/teensy_naneyeC/> by
 | | |
 |---|---|
 | Reference capture decoded | done: 7 frames, every start/stop bit valid |
-| Host decode, transport, recorder, viewer | done; 85 tests passing, no hardware required |
+| Colour sensor and ISP | done; BGGR mosaic, demosaic + white balance + colour matrix + gamma at 2.3 ms a frame |
+| Host decode, transport, recorder, viewer | done; 112 tests passing, no hardware required |
 | Start-up and row lock | reliable: reference start sequence plus a bit-level row lock |
 | 49.5 MHz (default) | **35.5 fps**, 10 minutes with no lost frame, 0 failed rows, 0 concealed pixels ([how](docs/hardware.md#clock-rates)) |
 | 24.75 / 12.375 MHz | 17.9 / 8.4 fps, 0 failed rows |
@@ -74,7 +75,7 @@ firmware/               PlatformIO project for the Teensy 4.1
 host/naneye/            decoder, transport, sources, viewer, recorder, Saleae client
 tools/                  golden-capture decoder, test-vector generator, Saleae
                         bring-up tools (show_bringup, check_alignment, capture/analyze_link)
-tests/                  85 tests, no hardware required
+tests/                  112 tests, no hardware required
 ```
 
 ## The reference capture
@@ -99,7 +100,7 @@ The host side is managed with [uv](https://docs.astral.sh/uv/):
 ```bash
 uv sync                                    # create the environment from uv.lock
 uv run python tools/decode_golden.py       # decode the reference capture (~50 s first run)
-uv run pytest                              # 85 tests
+uv run pytest                              # 112 tests
 uv run --group firmware python -m platformio run -d firmware  # build the firmware
 ```
 

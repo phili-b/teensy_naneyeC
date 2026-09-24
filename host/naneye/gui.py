@@ -25,7 +25,7 @@ import numpy as np
 from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtCore import Qt
 
-from . import protocol, regs
+from . import color, isp as isp_mod, protocol, regs
 from .accounting import FrameAccounting
 from .sources import _decode, open_source
 
@@ -186,9 +186,14 @@ class ImageView(QtWidgets.QWidget):
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
                            QtWidgets.QSizePolicy.Policy.Expanding)
 
-    def set_image(self, gray8: np.ndarray):
-        h, w = gray8.shape
-        qimg = QtGui.QImage(gray8.data, w, h, w, QtGui.QImage.Format.Format_Grayscale8)
+    def set_image(self, img8: np.ndarray):
+        """Grey (h, w) or colour (h, w, 3), both uint8 and C-contiguous."""
+        if img8.ndim == 3:
+            h, w, _ = img8.shape
+            qimg = QtGui.QImage(img8.data, w, h, w * 3, QtGui.QImage.Format.Format_RGB888)
+        else:
+            h, w = img8.shape
+            qimg = QtGui.QImage(img8.data, w, h, w, QtGui.QImage.Format.Format_Grayscale8)
         self._pixmap = QtGui.QPixmap.fromImage(qimg.copy())
         self.update()
 
@@ -319,6 +324,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.painted = collections.deque(maxlen=400)
         self.paused = False
         self.auto_contrast = True
+        # Colour: the switch decides what is shown, the pattern decides how it is read. The
+        # device's own answer (from the frame header) is followed until the switch is touched.
+        self.rgb_mode = False
+        self.rgb_chosen = False      # the user worked the switch: stop following the header
+        self.cfa = color.PATTERNS[0]
+        self.wb_gains = None
+        self.header_cfa = protocol.Header().cfa
+        self.isp = isp_mod.Isp(pattern=self.cfa)
         self.header = None
         self.img = None
         self.controls_ready = False
@@ -371,6 +384,7 @@ class MainWindow(QtWidgets.QMainWindow):
         side.setSpacing(10)
         side.addWidget(self._link_box())
         side.addWidget(self._acquisition_box(clock_hz))
+        side.addWidget(self._colour_box())
         side.addWidget(self._exposure_box())
         side.addWidget(self._analog_box())
         side.addWidget(self._led_box())
@@ -392,6 +406,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         (Qt.Key.Key_Minus, lambda: self._nudge_exposure(8)),
                         (Qt.Key.Key_R, self._recommended), (Qt.Key.Key_Q, self.close),
                         (Qt.Key.Key_L, lambda: self.btn_led.toggle()),
+                        (Qt.Key.Key_C, lambda: self.sw_rgb.setChecked(not self.rgb_mode)),
                         (Qt.Key.Key_BracketLeft, lambda: self._nudge_led(-1.0)),
                         (Qt.Key.Key_BracketRight, lambda: self._nudge_led(1.0))):
             QtGui.QShortcut(QtGui.QKeySequence(key), self, activated=fn)
@@ -455,6 +470,153 @@ class MainWindow(QtWidgets.QMainWindow):
         for w in (self.clock, self.btn_start, self.btn_stop):
             w.setEnabled(live)
         return box
+
+    def _colour_box(self):
+        """Mono or RGB, which mosaic, and what to do about white balance."""
+        box = self._group("Colour")
+        g = QtWidgets.QGridLayout(box)
+        self.sw_mono = QtWidgets.QPushButton("Mono")
+        self.sw_rgb = QtWidgets.QPushButton("RGB")
+        group = QtWidgets.QButtonGroup(box)
+        group.setExclusive(True)
+        for i, b in enumerate((self.sw_mono, self.sw_rgb)):
+            b.setCheckable(True)
+            group.addButton(b, i)
+        self.sw_mono.setChecked(True)
+        self.sw_rgb.toggled.connect(self._rgb_toggled)
+
+        self.cfa_box = QtWidgets.QComboBox()
+        for p in color.PATTERNS:
+            self.cfa_box.addItem(p, p)
+        self.cfa_box.currentIndexChanged.connect(self._cfa_changed)
+
+        self.wb_box = QtWidgets.QComboBox()
+        self.wb_box.addItem("as measured", None)
+        self.wb_box.addItem("grey world (once)", "once")
+        self.wb_box.addItem("grey world (every frame)", "auto")
+        self.wb_box.currentIndexChanged.connect(self._wb_changed)
+
+        self.black = QtWidgets.QSpinBox()
+        self.black.setRange(0, 512)
+        self.black.setSingleStep(4)
+        self.black.setSuffix(" DN")
+        self.black.valueChanged.connect(
+            lambda v: setattr(self.isp, "black_level", float(v)))
+        self.btn_black = QtWidgets.QPushButton("from frame")
+        self.btn_black.setToolTip("The darkest 1 % of the current frame. A real black "
+                                  "level needs a covered lens.")
+        self.btn_black.clicked.connect(self._black_from_frame)
+
+        self.gamma_box = QtWidgets.QComboBox()
+        for name, value in isp_mod.GAMMAS.items():
+            self.gamma_box.addItem(name, value)
+        self.gamma_box.setCurrentIndex(list(isp_mod.GAMMAS).index("2.2"))
+        self.gamma_box.currentIndexChanged.connect(
+            lambda: setattr(self.isp, "gamma", self.gamma_box.currentData()))
+
+        self.ccm_box = QtWidgets.QComboBox()
+        for name in isp_mod.MATRICES:
+            self.ccm_box.addItem(name, name)
+        self.ccm_box.currentIndexChanged.connect(
+            lambda: setattr(self.isp, "matrix", self.ccm_box.currentData()))
+
+        self.lbl_cfa = QtWidgets.QLabel("")
+        self.lbl_cfa.setObjectName("caption")
+        self.lbl_cfa.setWordWrap(True)
+        g.addWidget(self.sw_mono, 0, 0)
+        g.addWidget(self.sw_rgb, 0, 1)
+        g.addWidget(QtWidgets.QLabel("mosaic"), 1, 0)
+        g.addWidget(self.cfa_box, 1, 1, 1, 2)
+        g.addWidget(QtWidgets.QLabel("black level"), 2, 0)
+        g.addWidget(self.black, 2, 1)
+        g.addWidget(self.btn_black, 2, 2)
+        g.addWidget(QtWidgets.QLabel("white balance"), 3, 0)
+        g.addWidget(self.wb_box, 3, 1, 1, 2)
+        g.addWidget(QtWidgets.QLabel("colour matrix"), 4, 0)
+        g.addWidget(self.ccm_box, 4, 1, 1, 2)
+        g.addWidget(QtWidgets.QLabel("gamma"), 5, 0)
+        g.addWidget(self.gamma_box, 5, 1, 1, 2)
+        g.addWidget(self.lbl_cfa, 6, 0, 1, 3)
+        self._update_cfa_caption()
+        return box
+
+    def _black_from_frame(self):
+        if self.img is not None:
+            self.black.setValue(int(self.isp.measure_black_level(self.img)))
+
+    def _rgb_toggled(self, on: bool):
+        self.rgb_mode = on
+        self.rgb_chosen = True
+        self.wb_gains = None
+        self._update_cfa_caption()
+
+    def _cfa_changed(self):
+        self.cfa = self.isp.pattern = self.cfa_box.currentData()
+        self.wb_gains = None
+        self._update_cfa_caption()
+
+    def _wb_changed(self):
+        self.wb_gains = None
+        self.isp.gains = (1.0, 1.0, 1.0)
+        self._update_cfa_caption()
+
+    def _follow_header_cfa(self, header):
+        """Adopt what the device says its sensor is, until the switch is touched."""
+        cfa = header.cfa
+        if cfa == self.header_cfa:
+            return
+        self.header_cfa = cfa
+        if cfa != color.MONO:
+            self.cfa_box.blockSignals(True)
+            self.cfa_box.setCurrentIndex(color.PATTERNS.index(cfa))
+            self.cfa_box.blockSignals(False)
+            self.cfa = self.isp.pattern = cfa
+        if not self.rgb_chosen:
+            want_rgb = cfa != color.MONO
+            (self.sw_rgb if want_rgb else self.sw_mono).setChecked(True)
+            self.rgb_chosen = False      # following the device is not a choice
+            self.rgb_mode = want_rgb
+        self._update_cfa_caption()
+
+    def _update_cfa_caption(self):
+        said = ("the device says MONO" if self.header_cfa == color.MONO
+                else f"the device says {self.header_cfa}")
+        if not self.rgb_mode:
+            what = "raw mosaic, black level and gamma only"
+        else:
+            r, _, b = self.isp.gains
+            wb = f", WB R×{r:.2f} B×{b:.2f}" if (r, b) != (1.0, 1.0) else ""
+            what = f"bilinear demosaic{wb}"
+        self.lbl_cfa.setText(f"{what} — {said} (the CFA travels in the frame header). "
+                             f"ISP {self.isp.last_ms:.1f} ms/frame")
+
+    def _to_display(self, img):
+        """Raw frame -> uint8 for the view, through the ISP.
+
+        Auto contrast is a stretch of the linear image before gamma, so it works the same
+        in both modes and does not fight the tone curve.
+        """
+        full = 1023.0 if img.dtype == np.uint16 else 255.0
+        self.isp.white = full
+        self.isp.demosaic = self.rgb_mode and img.ndim == 2
+        wb = self.wb_box.currentData()
+        if self.isp.demosaic and (wb == "auto" or (wb == "once" and self.wb_gains is None)):
+            self.wb_gains = self.isp.gains = self.isp.auto_white_balance(img)
+        elif not self.isp.demosaic:
+            self.isp.gains = (1.0, 1.0, 1.0)
+        t0 = time.perf_counter()
+        if self.auto_contrast:
+            lin = self.isp.linear(img)                  # the ISP's own buffer
+            lo, hi = (float(v) for v in np.percentile(lin[::2, ::2], [0.5, 99.5]))
+            hi = max(hi, lo + 1.0)
+            np.subtract(lin, lo, out=lin)
+            np.multiply(lin, full / (hi - lo), out=lin)
+            out = self.isp.apply_curve(lin)
+        else:
+            lo, hi = 0.0, full
+            out = self.isp.process(img)
+        self.isp.last_ms = (time.perf_counter() - t0) * 1000.0
+        return np.ascontiguousarray(out), (lo, hi)
 
     def _exposure_box(self):
         box = self._group("Exposure and gain")
@@ -752,14 +914,11 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.device_cfg = (header.cfg0, header.cfg1)
 
-        if self.auto_contrast:
-            lo, hi = np.percentile(img[::2, ::2], [0.5, 99.5])
-            hi = max(hi, lo + 1)
-        else:
-            lo, hi = 0, (1023 if img.dtype == np.uint16 else 255)
-        gray = ((img.astype(np.float32) - lo) * (255.0 / (hi - lo))).clip(0, 255)
-        self.view.set_image(np.ascontiguousarray(gray.astype(np.uint8)))
-        self.hist.set_data(img, (lo, hi))
+        self._follow_header_cfa(header)
+        shown, (lo, hi) = self._to_display(img)
+        self.view.set_image(shown)
+        self.hist.set_data(img, (lo, hi))   # the raw mosaic values, whatever is displayed
+        self._update_cfa_caption()
         self.painted.append(time.monotonic())
 
     def _watch_link(self):

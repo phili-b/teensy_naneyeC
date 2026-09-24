@@ -6,6 +6,7 @@
 // (and counted) if the host cannot keep up. A frame is never truncated.
 
 #include <Arduino.h>
+#include <EEPROM.h>
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -32,6 +33,44 @@ static constexpr size_t FB_SIZE = 128000;
 static DMAMEM uint8_t s_fb[2 * FB_SIZE];
 
 static uint8_t s_format = proto::FMT_GRAY10;  // full sensor resolution by default
+
+// Which colour filter array the sensor fitted to the board has. Nothing on the link tells
+// us -- a mono and a colour NanEyeC stream identical-looking pixels -- so it is told once
+// and remembered across resets, and then travels in every frame's header for the host.
+static constexpr int EEPROM_CFA_ADDR = 0;
+static constexpr uint8_t EEPROM_CFA_MAGIC = 0xC0;  // high nibble marks a value we wrote
+static uint8_t s_cfa = proto::CFA_MONO;
+
+static const char* cfa_name(uint8_t cfa) {
+    switch (cfa) {
+        case proto::CFA_BGGR: return "BGGR";
+        case proto::CFA_GBRG: return "GBRG";
+        case proto::CFA_GRBG: return "GRBG";
+        case proto::CFA_RGGB: return "RGGB";
+        default: return "MONO";
+    }
+}
+
+static bool cfa_from_name(const char* name, uint8_t& out) {
+    for (uint8_t c = proto::CFA_MONO; c <= proto::CFA_RGGB; c++) {
+        if (!strcmp(name, cfa_name(c))) {
+            out = c;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void cfa_load() {
+    const uint8_t stored = EEPROM.read(EEPROM_CFA_ADDR);
+    if ((stored & 0xF0) == EEPROM_CFA_MAGIC && (stored & 0x0F) <= proto::CFA_RGGB) {
+        s_cfa = stored & 0x0F;
+    }
+}
+
+static void cfa_store() {
+    EEPROM.update(EEPROM_CFA_ADDR, (uint8_t)(EEPROM_CFA_MAGIC | s_cfa));
+}
 static bool s_run = false;
 static uint32_t s_frame_counter = 0;
 static uint32_t s_frames_dropped = 0;
@@ -236,10 +275,10 @@ static void handle_command(char* line) {
 
     if (!strcmp(tok[0], "ID")) {
         reply("naneye-teensy %s  sclk=%lu Hz (nominal %lu, LPSPI root %lu Hz)  "
-              "cfg0=0x%04X cfg1=0x%04X  fmt=%u  last reset: %s (SRSR 0x%03lX)",
+              "cfg0=0x%04X cfg1=0x%04X  fmt=%u  cfa=%s  last reset: %s (SRSR 0x%03lX)",
               FW_VERSION, (unsigned long)seim::sclk_hz(),
               (unsigned long)seim::nominal_sclk_hz(), (unsigned long)seim::lpspi_root_hz(),
-              seim::config0(), seim::config1(), s_format,
+              seim::config0(), seim::config1(), s_format, cfa_name(s_cfa),
               watchdog::last_reset_was_watchdog() ? "WATCHDOG" : "normal",
               (unsigned long)watchdog::reset_status());
     } else if (!strcmp(tok[0], "CLKMEAS")) {
@@ -262,6 +301,19 @@ static void handle_command(char* line) {
         // was off turned it on -- which is a poor answer to a question.
         if (n > 1) seim::power(parse_u32(tok[1], 1) != 0);
         reply("POWER %d%s", seim::powered() ? 1 : 0, n > 1 ? "" : "  (POWER 0|1 to change)");
+    } else if (!strcmp(tok[0], "CFA")) {
+        uint8_t want = s_cfa;
+        if (n > 1) {
+            for (char* p = tok[1]; *p; p++) *p = (char)toupper(*p);
+            if (!cfa_from_name(tok[1], want)) {
+                reply("CFA '%s' unknown. Try MONO BGGR GBRG GRBG RGGB", tok[1]);
+                return;
+            }
+            s_cfa = want;
+            cfa_store();
+        }
+        reply("CFA %s%s  (the 2x2 the first pixel of the first row starts; remembered "
+              "across resets)", cfa_name(s_cfa), n > 1 ? " stored" : "");
     } else if (!strcmp(tok[0], "CLK")) {
         const ClockSetting& c = seim::set_clock(parse_u32(tok[1], 12375000u));
         reply("CLK %lu Hz  sckdiv=%u mclk_mode=%u high_speed=%u%s",
@@ -466,7 +518,7 @@ static void handle_command(char* line) {
     } else if (!strcmp(tok[0], "SELFTEST")) {
         selftest();
     } else {
-        reply("unknown command '%s'. Try ID POWER CLK CLKMEAS SAMPLE START STOP DEPTH EXP "
+        reply("unknown command '%s'. Try ID POWER CFA CLK CLKMEAS SAMPLE START STOP DEPTH EXP "
               "GAIN REG LED LEDI LEDMAX PROBE STATS SELFTEST",
               tok[0]);
     }
@@ -500,6 +552,7 @@ void setup() {
     watchdog::begin();
     Serial.begin(115200);  // rate is ignored for USB CDC
     proto::crc32_init();
+    cfa_load();
     led::begin();
     seim::begin();
 }
@@ -549,7 +602,7 @@ void loop() {
     h.width = (uint16_t)WIDTH;
     h.height = (uint16_t)HEIGHT;
     h.format = s_format;
-    h.flags = 0;
+    h.flags = proto::flags_with_cfa(0, s_cfa);
     // SYNC_LOST means the row phase itself is in doubt (training words wrong); isolated
     // corrupt pixels are CONCEALED instead, and both still count in rows_failed.
     if (info.rows_sync_lost) h.flags |= proto::FLAG_SYNC_LOST;

@@ -276,6 +276,26 @@ interpreting radiometry.
 
 ---
 
+### 4.5 Colour filter array, and where colour is processed
+
+A colour NanEyeC is indistinguishable from a mono one on the link: same framing, same word
+size, no identifier. So which sensor is fitted is configuration, not measurement. `CFA` sets
+it, EEPROM remembers it, and bits 4-6 of every frame header's flags carry it, which makes
+each frame and each recording self-describing.
+
+Pattern, from the datasheet (6.3.1): the first pixel read out, (1,1), is the bottom left one
+and has a blue filter, so the array as received starts **BGGR**. Confirmed on the bench as
+far as a frame can confirm it — the two green sites are the (0,1)/(1,0) diagonal, by
+sub-lattice correlation and by their response to the board's white LED. Red against blue is
+the datasheet's word alone: no single frame distinguishes them, and the white LED lifts both
+equally.
+
+The ISP (`host/naneye/isp.py`) is black level, white balance, bilinear demosaic, colour
+matrix and gamma, in that order, and it is built for **speed rather than fidelity**: 2.3 ms
+per 320x320 frame against the 28 ms a 35 fps frame allows. White balance is applied on the
+mosaic, where there is a quarter of the data; the demosaic kernels are separable; gamma is a
+lookup table. The colour matrix is uncalibrated and defaults to identity.
+
 ## 5. Sensor interface — protocol summary
 
 ### 5.1 SEIM basics
@@ -509,7 +529,9 @@ offset size field
 20      2   width  = 320
 22      2   height = 320
 24      1   format  0=8-bit, 1=10-bit packed (5 B per 4 px), 2=raw 12-bit PP
-25      1   flags   bit0 sync_lost, bit1 clock_gap, bit2 first_frame_discarded
+25      1   flags   bit0 sync_lost, bit1 clock_gap, bit2 first_frame_discarded,
+                    bit3 concealed, bits4-6 colour filter array (0 mono, 1 BGGR,
+                    2 GBRG, 3 GRBG, 4 RGGB; §4.5)
 26      2   rows_failed_validation
 28      4   sclk_hz
 32      4   exposure_pp
@@ -532,6 +554,7 @@ DEPTH 8|10|12
 EXP <rows_in_reset> [rows_delay]
 GAIN <ramp_gain> <cds_gain>
 REG <0|1> <0xHHHH>     → raw register write
+CFA MONO|BGGR|...      → which sensor is fitted; kept in EEPROM, sent in every header
 LED 0|1                → LED_VCC_ON + DAC power-up/down
 LEDI <mA>              → LED current, 0..20 mA (ceiling raised with LEDMAX)
 STATS                  → counters
@@ -622,7 +645,11 @@ tests/          golden decode regression, protocol round-trip
 
 - UVC / standard webcam enumeration (D1; may be revisited after M6).
 - LVDS mode — needs a comparator front-end and > 750 MHz sampling; impossible on a Teensy.
-- Colour processing / debayering — sensor is mono (D2, §3.4).
+- On-device colour processing. **D2 was reversed on 2026-09-24**: a colour NanEyeC was
+  fitted, so the mosaic is now real. The firmware still only records *which* mosaic
+  (`CFA`, §4.5) and passes pixels through untouched; demosaicing and the rest of the ISP
+  live on the PC, where changing them costs a restart of a Python process rather than a
+  reflash, and where the raw mosaic stays available for measurement.
 - Multi-camera synchronisation.
 - On-Teensy image processing beyond unpacking and optional 10→8-bit reduction.
 

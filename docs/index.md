@@ -1,7 +1,7 @@
 # NanEyeC on Teensy 4.1
 
-This project turns an **ams-OSRAM NanEyeC**, a 1 mm² camera sensor, into a USB camera for a
-Windows PC. The sensor sits on an ams **NanoBerry** evaluation board, a **Teensy 4.1**
+This project turns an **ams-OSRAM NanEyeC**, a 1 mm² camera sensor in mono or colour, into
+a USB camera for a Windows PC. The sensor sits on an ams **NanoBerry** evaluation board, a **Teensy 4.1**
 microcontroller talks to it, and the PC receives 320 × 320 monochrome images at up to
 35 frames per second, with Python tools to view and record them.
 
@@ -32,7 +32,9 @@ histogram.*
 | Exposure control | verified: brightness follows exposure linearly from 1.3 to 102 ms |
 | Watchdog | hardware watchdog resets a hung Teensy within 2 s |
 | Illumination (the board's LEDs) | **working**: DAC writes verified on the wire, image brightness linear at 1.98 DN/mA to 20 mA |
-| Host software | PyQt6 camera GUI, recorder, Python API; 85 automated tests, no hardware needed |
+| Colour sensor | **working**: BGGR mosaic confirmed on the bench, carried in every frame header |
+| ISP | black level, white balance, bilinear demosaic, colour matrix, gamma — **2.3 ms a frame**, against 28 ms available |
+| Host software | PyQt6 camera GUI with a Mono/RGB switch, recorder, Python API; 112 automated tests, no hardware needed |
 
 ## Where to go
 
@@ -90,7 +92,7 @@ doc/                    NOT tracked: datasheets, schematic, reference capture
 firmware/               PlatformIO project for the Teensy 4.1
 host/naneye/            Python package: decoder, transport, viewer, recorder, Saleae client
 tools/                  reference-capture decoder, logic-analyser bring-up tools
-tests/                  85 tests, none needing hardware
+tests/                  112 tests, none needing hardware
 ```
 
 ## Building these docs

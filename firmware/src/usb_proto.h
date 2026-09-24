@@ -31,7 +31,28 @@ enum Flags : uint8_t {
     FLAG_CLOCK_GAP = 1u << 1,
     FLAG_FIRST_DISCARDED = 1u << 2,
     FLAG_CONCEALED = 1u << 3,  // some pixels were corrupt and replaced by their neighbours
+    // Bits 4-6 carry the colour filter array, so a frame says for itself whether it is a
+    // mosaic and which phase it starts on. Mono and colour NanEyeCs are the same part
+    // number to the link: nothing in the data distinguishes them, so it is configured once
+    // (CFA command, kept in EEPROM) and reported with every frame.
+    FLAG_CFA_SHIFT = 4,
+    FLAG_CFA_MASK = 7u << 4,
 };
+
+// The 2x2 the first received pixel starts: the sensor reads pixel (1,1), the bottom left
+// one, first, and on a colour part that pixel is blue (datasheet 6.3.1) -> CFA_BGGR.
+enum Cfa : uint8_t {
+    CFA_MONO = 0,
+    CFA_BGGR = 1,
+    CFA_GBRG = 2,
+    CFA_GRBG = 3,
+    CFA_RGGB = 4,
+};
+
+inline uint8_t cfa_of(uint8_t flags) { return (flags & FLAG_CFA_MASK) >> FLAG_CFA_SHIFT; }
+inline uint8_t flags_with_cfa(uint8_t flags, uint8_t cfa) {
+    return (uint8_t)((flags & ~FLAG_CFA_MASK) | ((cfa << FLAG_CFA_SHIFT) & FLAG_CFA_MASK));
+}
 
 // 52-byte header. All fields little-endian; crc32 covers header[0..47] plus the payload.
 struct __attribute__((packed)) Header {

@@ -68,6 +68,7 @@ uv run python -m naneye.gui --snapshot gui.png                # screenshot after
 | **Link** | *fps received*: frames that arrived over USB intact, per second. *fps displayed*: frames painted. Link lock state, *failed rows*, *concealed px*, *lost on PC* (left the device, never arrived intact), *dropped by device* (skipped by the firmware because the PC had not taken the previous frame yet), frame counter, SCLK |
 | **Acquisition** | Clock rate, Start, Stop, Pause, auto contrast, Save frame (16-bit PNG, raw values). *Start* powers the sensor and streams; *Stop* powers it off |
 | **Exposure and gain** | Sliders for exposure, frame delay, ramp gain and CDS gain, each read out in real units (ms, fps, ×) |
+| **Colour** | The **Mono / RGB** switch, the mosaic, and the ISP: black level, white balance, colour matrix, gamma. The caption says what the device reported and how long the ISP took |
 | **Analog settings** | Sliders for the six analog fields, amber when not at the datasheet's recommended value, and a *Datasheet recommended* button. Collapsible |
 | **Illumination** | The NanoBerry's LEDs: on/off, current in 0.1 mA steps with the DAC code it becomes, and the current ceiling (`LEDMAX`, default 20 mA, hardware maximum 44.6 mA). Switching on sends the current first, because the DAC powers up at zero |
 | **Registers** | Both registers decoded field by field; firmware-owned fields grey |
@@ -122,6 +123,65 @@ them, in the measurement that found this).
 lets go of the port. So a closed GUI leaves the bench dark, unclocked and with the sensor's
 rail down, and *Start* brings it all back — `START` power-cycles the sensor anyway. The same
 is true of any `DeviceSource`, the recorder included: closing one powers the board down.
+
+## Colour, and the ISP
+
+A colour NanEyeC has a Bayer filter over the pixels and streams the mosaic exactly as a
+mono one streams pixels: nothing in the data says which is which. So the firmware is told
+once — `CFA BGGR`, kept in EEPROM — and it repeats the answer in the flags of **every
+frame header**. The GUI follows that automatically and a recording is still readable years
+later. The datasheet (6.3.1) fixes the pattern: the first pixel read out is the bottom-left
+one and is blue, which makes the array as received **BGGR**.
+
+The **Mono / RGB** switch decides what you look at. Mono shows the raw mosaic as it
+arrives, which is what you want when measuring; RGB runs the ISP. The switch follows the
+device until you touch it, after which it is yours. ++c++ toggles it.
+
+### The pipeline
+
+```
+black level  ->  white balance  ->  demosaic  ->  colour matrix  ->  gamma
+```
+
+| Stage | What it does | Why it is that cheap |
+|---|---|---|
+| Black level | subtracts a pedestal, clipped at zero | a constant; folded into the white balance multiply |
+| White balance | per-colour gain | applied on the **mosaic**, where there is a quarter of the data, as one multiply by a precomputed gain map |
+| Demosaic | bilinear | separable [1,2,1] kernels, weights precomputed once per frame size, no allocation per frame |
+| Colour matrix | one 3×3 | a single `matmul`, which NumPy gives to BLAS |
+| Gamma | 2.2, 1.8, linear or sRGB | a 1024-entry lookup table: an array index, not a power per pixel |
+
+**Speed is the point, not fidelity** — this is the viewfinder of a measurement camera, and
+the thing that gets recorded and measured is the raw 10-bit mosaic. Measured on the bench
+at 320 × 320: **2.3 ms a frame** with every stage on, 1.6 ms without the colour matrix,
+0.3 ms in mono. A frame at 35 fps allows 28 ms. The GUI shows the live figure in the
+Colour panel's caption, so it cannot quietly rot.
+
+Not included, deliberately: lens shading, denoise, sharpening, defect correction, local
+tone mapping. None of them would make a measurement truer, and all of them invent data.
+
+### What is honest and what is not
+
+| | |
+|---|---|
+| **Measured** | the mosaic phase: the two green sites are the (0,1)/(1,0) diagonal, by sub-lattice correlation (0.64 against 0.43) and by their response to the board's white LED (+56 DN against +40 DN) |
+| **From the datasheet** | that the (0,0) corner is blue and not red. Nothing in a frame can tell red from blue, and the white LED lifts both corners equally, so this one is on the datasheet's word. If your reds and blues are swapped, the mosaic list in the panel is one click away |
+| **Not calibrated** | the colour matrix. `none` is the default and is the honest one; `saturation` is a mild lift that makes the preview look like a camera and says nothing true about colour. A real matrix comes from a colour chart, which this project has not shot |
+| **Not calibrated** | the black level. *from frame* takes the darkest 1 % of what is in view, which beats zero and is not a dark frame |
+
+From Python, without the GUI:
+
+```python
+from naneye.isp import Isp
+from naneye.sources import open_source
+
+isp = Isp(pattern="BGGR", black_level=64, gamma=2.2)
+with open_source("auto") as src:
+    for header, raw in src.frames():
+        isp.pattern = header.cfa          # the frame says what it is
+        rgb8 = isp.process(raw)           # (320, 320, 3) uint8
+        linear = isp.linear(raw)          # float32, pre-gamma, for measurement
+```
 
 ## Lightweight viewer
 
@@ -347,7 +407,7 @@ Diagnostic commands (`LISTEN`, `PROBE`, `START REF`, `START AN`, `ALIGN`, `CLKME
 ## Tests
 
 ```bash
-uv run pytest          # 85 tests, none needing hardware
+uv run pytest          # 112 tests, none needing hardware
 ```
 
 | File | Covers |

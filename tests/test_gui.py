@@ -185,3 +185,47 @@ def test_stop_and_close_power_the_sensor_off():
 
     win.close()
     assert src.device.sent[:3] == ["STOP", "LED 0", "POWER 0"]
+
+
+def test_the_colour_switch_turns_the_mosaic_into_rgb():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    from naneye import color
+
+    src = _RecordingSource()
+    win = gui.MainWindow(src, 49500000)
+    raw = np.full((8, 8), 500, np.uint16)
+    raw[color.masks("BGGR", raw.shape)["R"]] = 900
+
+    shown, _ = win._to_display(raw)
+    assert shown.ndim == 2                      # mono: the raw mosaic, as received
+
+    win.sw_rgb.setChecked(True)
+    shown, _ = win._to_display(raw)
+    assert shown.shape == (8, 8, 3)             # RGB: demosaiced
+    assert shown[4, 4, 0] > shown[4, 4, 2]      # red is the bright channel
+
+    win.sw_mono.setChecked(True)
+    assert win._to_display(raw)[0].ndim == 2
+    win.close()
+
+
+def test_the_gui_follows_the_mosaic_the_device_reports():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    from naneye import color
+
+    win = gui.MainWindow(_RecordingSource(), 49500000)
+    assert not win.rgb_mode                                  # nothing said yet: mono
+
+    win._follow_header_cfa(header(1))                        # a mono device stays mono
+    assert not win.rgb_mode
+
+    colour = header(2)
+    colour.flags |= color.CODE_BY_CFA["GRBG"] << protocol.FLAG_CFA_SHIFT
+    win._follow_header_cfa(colour)
+    assert win.rgb_mode and win.cfa == "GRBG"
+
+    win.sw_mono.setChecked(True)                             # the switch wins from now on
+    win._follow_header_cfa(header(3))
+    win._follow_header_cfa(colour)
+    assert not win.rgb_mode
+    win.close()

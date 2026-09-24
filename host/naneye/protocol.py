@@ -30,6 +30,11 @@ FLAG_SYNC_LOST = 1 << 0
 FLAG_CLOCK_GAP = 1 << 1
 FLAG_FIRST_DISCARDED = 1 << 2
 FLAG_CONCEALED = 1 << 3
+# Bits 4-6 carry the colour filter array (naneye.color): 0 mono, 1 BGGR, 2 GBRG, 3 GRBG,
+# 4 RGGB. The sensor does not say whether it is a colour part, so the firmware is told once
+# and repeats it in every frame.
+FLAG_CFA_SHIFT = 4
+FLAG_CFA_MASK = 7 << 4
 
 HEADER_FMT = "<IBBHIIIHHBBHIIHHIII"
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
@@ -91,6 +96,13 @@ class Header:
     @property
     def sync_lost(self) -> bool:
         return bool(self.flags & FLAG_SYNC_LOST)
+
+    @property
+    def cfa(self) -> str:
+        """'MONO', or the Bayer pattern of the top-left 2x2 as received."""
+        from .color import CFA_BY_CODE, MONO
+
+        return CFA_BY_CODE.get((self.flags & FLAG_CFA_MASK) >> FLAG_CFA_SHIFT, MONO)
 
     def exposure_us(self) -> float:
         """Effective exposure in microseconds, from the pixel-period count and SCLK."""

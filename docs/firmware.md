@@ -273,6 +273,14 @@ would look. With 500 per frame at 49.5 MHz, every one was detected and concealed
 
 `SELFTEST` checks concealment too, on the golden row with one word broken on purpose.
 
+## Telling the firmware which sensor is fitted
+
+A mono and a colour NanEyeC are indistinguishable on the link, so `CFA MONO|BGGR|GBRG|GRBG|RGGB`
+tells the firmware which is on the board. It keeps the answer in EEPROM, so it survives
+resets and reflashes, reports it in `ID`, and puts it in bits 4–6 of every frame header's
+flags. Nothing else in the firmware cares: the pixels are passed through untouched, and all
+the colour work happens on the PC.
+
 ## Register writes land one frame late
 
 [Measured.](seim.md#exposure) The frame header therefore reports the configuration that was

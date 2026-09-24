@@ -298,6 +298,37 @@ close to the board and does almost nothing to the background. At the bench's amb
     unevenly shared. Worth checking visually and writing down; it changes nothing in the
     firmware, only what the number means.
 
+## Swapping in the colour sensor (2026-09-24)
+
+The colour module went in and nothing streamed. `START` failed at every clock rate with
+*"sensor answers but could not lock onto its rows"*, which reads like a signal-integrity
+problem and was not one: the sampling calibration reported a **perfect** eye at
+12.375 MHz — zero training breaks at all four sampling points.
+
+The logic analyser settled it. After the idle-off write the sensor sends training, and the
+row lock searches the next **8 rows** for the moment training turns into pixels. Measured
+on the wire:
+
+| | Training before the first row |
+|---|---|
+| the mono part | ~12,080 bits ≈ 985 PP ≈ **3 rows** |
+| this colour part | 23,566 bits ≈ 1,964 PP ≈ **6 rows** |
+
+Almost exactly one extra INTERFACE + SYNC cycle. Six rows still fits inside eight, which is
+why the failure looked intermittent rather than absolute — the search was ending a few
+hundred bits before the answer. The window is now **48 rows**. It costs nothing when the
+transition comes early, because the search stops when it finds it.
+
+The lesson is the same one as the very first bring-up: a start-up constant measured on one
+sample of hardware is not a constant, it is a measurement of that sample.
+
+!!! note "The first row of every frame"
+    Row 0 reads about 80 DN darker than the rest, and its first few pixels come back
+    saturated (`1022`) where the row's training pattern runs into pixel 0's start bit. It
+    shows up as a coloured line along the top of the image once demosaiced. It is one row
+    of 320 and it is left in the data rather than quietly cropped; if you are measuring,
+    skip row 0.
+
 ## Bring-up
 
 Staged, each stage with something that can actually fail. Do not skip ahead: a wrong answer
@@ -313,6 +344,7 @@ defined in the [design record](design.md) (spec.md §9).
 | M4 | continuous streaming without loss | done: 10 minutes at 49.5 MHz, nothing lost (the Saleae no-gap-within-a-row check is still to do) |
 | M5 | exposure control | done: exposure linear 1.3–102 ms, illumination linear 0–20 mA |
 | M6 | measurement readiness: dark frames, noise | not started |
+| M8 | colour sensor | done 2026-09-24: BGGR mosaic, demosaic and ISP on the host |
 
 What it took to get to first light, including three faults that looked like sensor problems
 and were not, is in [First light](#first-light-what-it-took-2026-09-18) below.
@@ -320,7 +352,7 @@ and were not, is in [First light](#first-light-what-it-took-2026-09-18) below.
 ### M0 — before the camera is connected
 
 ```bash
-uv run pytest                                     # 85 tests
+uv run pytest                                     # 112 tests
 uv run --group firmware python -m platformio run -d firmware -t upload
 ```
 

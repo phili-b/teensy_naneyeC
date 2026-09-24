@@ -649,7 +649,7 @@ bool auto_sample() { return s_auto_sample; }
 // (8 x 0x555, ending in 1) broken by two 1s -- the second is pixel 0's start bit. The row
 // after that is then checked for its 8 training words before anything is trusted.
 static bool lock_row_phase() {
-    constexpr uint32_t MAX_SEARCH_ROWS = 8;  // training is ~3 rows long
+    constexpr uint32_t MAX_SEARCH_ROWS = 48;  // training is ~3 rows long
     uint32_t last = 2;                      // no previous bit yet
     uint32_t run = 0;                       // alternations in the current run
     bool seen_long = false;                 // the first frame's long training run
