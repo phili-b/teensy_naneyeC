@@ -43,6 +43,7 @@ DEFAULTS = {
     "white_balance": "auto",   # grey world, every frame
     "matrix": "saturation",
     "gamma": None,             # None is sRGB, see isp.GAMMAS
+    "highlights": "reconstruct",
 }
 
 CLOCKS = ((49500000, "49.5 MHz  (~35 fps)"), (24750000, "24.75 MHz  (~18 fps)"),
@@ -350,7 +351,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.header_seen = False
         self.defaults_sent = False   # the one-shot exposure default
         self.isp = isp_mod.Isp(pattern=self.cfa, black_level=DEFAULTS["black_level"],
-                               matrix=DEFAULTS["matrix"], gamma=DEFAULTS["gamma"])
+                               matrix=DEFAULTS["matrix"], gamma=DEFAULTS["gamma"],
+                               highlights=DEFAULTS["highlights"])
         self.header = None
         self.img = None
         self.controls_ready = False
@@ -546,14 +548,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ccm_box.currentIndexChanged.connect(
             lambda: setattr(self.isp, "matrix", self.ccm_box.currentData()))
 
-        self.chk_highlights = QtWidgets.QCheckBox("blown highlights to white")
-        self.chk_highlights.setChecked(True)
-        self.chk_highlights.setToolTip(
+        self.hl_box = QtWidgets.QComboBox()
+        for mode, label in (("off", "leave them (shows the tint)"),
+                            ("white", "clip to white"),
+                            ("reconstruct", "reconstruct")):
+            self.hl_box.addItem(label, mode)
+        self.hl_box.setCurrentIndex(
+            [self.hl_box.itemData(i) for i in range(self.hl_box.count())]
+            .index(DEFAULTS["highlights"]))
+        self.hl_box.setToolTip(
             "A pixel at the sensor's ceiling was equal in all three channels before the "
-            "white balance scaled them apart. Without this it comes out tinted -- pink, "
-            "with these gains and the saturation matrix.")
-        self.chk_highlights.toggled.connect(
-            lambda on: setattr(self.isp, "highlight_clip", on))
+            "white balance scaled them apart, which is what turns blown highlights pink. "
+            "'reconstruct' estimates the channels that ran out from the ones that did not "
+            "and rolls the rest smoothly to white; 'clip to white' is the blunt version.")
+        self.hl_box.currentIndexChanged.connect(
+            lambda: setattr(self.isp, "highlights", self.hl_box.currentData()))
 
         self.lbl_cfa = QtWidgets.QLabel("")
         self.lbl_cfa.setObjectName("caption")
@@ -571,7 +580,8 @@ class MainWindow(QtWidgets.QMainWindow):
         g.addWidget(self.ccm_box, 4, 1, 1, 2)
         g.addWidget(QtWidgets.QLabel("gamma"), 5, 0)
         g.addWidget(self.gamma_box, 5, 1, 1, 2)
-        g.addWidget(self.chk_highlights, 6, 0, 1, 3)
+        g.addWidget(QtWidgets.QLabel("highlights"), 6, 0)
+        g.addWidget(self.hl_box, 6, 1, 1, 2)
         g.addWidget(self.lbl_cfa, 7, 0, 1, 3)
         self._update_cfa_caption()
         return box

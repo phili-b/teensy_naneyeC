@@ -26,8 +26,7 @@ def test_the_fast_kernels_match_the_readable_ones():
 def test_the_demosaic_matches_the_reference_implementation():
     rng = np.random.default_rng(12)
     raw = rng.integers(0, 1024, (32, 32)).astype(np.uint16)
-    pipe = isp.Isp(pattern="GRBG", gamma=1.0)
-    pipe.highlight_clip = False        # that is a separate stage, tested below
+    pipe = isp.Isp(pattern="GRBG", gamma=1.0, highlights="off")   # a separate stage
     assert np.allclose(pipe.linear(raw), color.demosaic(raw, "GRBG"), atol=1e-2)
 
 
@@ -126,34 +125,37 @@ def test_clipped_highlights_come_out_neutral_not_tinted():
     pipe = isp.Isp(pattern="BGGR", black_level=170, gains=(1.11, 1.0, 1.44),
                    matrix="saturation", gamma=1.0)
 
-    tinted = pipe.linear(raw)[6, 6].copy()
-    pipe.highlight_clip = False
+    pipe.highlights = "off"
     off = pipe.process(raw)[6, 6]
     assert off[0] != off[1] or off[2] != off[1]          # the fault: a tint, not white
-    pipe.highlight_clip = True
-    on = pipe.process(raw)[6, 6]
-    assert tuple(on) == (255, 255, 255)
+    for mode in ("white", "reconstruct"):
+        pipe.highlights = mode
+        assert tuple(pipe.process(raw)[6, 6]) == (255, 255, 255), mode
     # and an ordinary pixel is untouched by any of it
-    assert np.array_equal(pipe.process(raw)[12, 12],
-                          isp.Isp(pattern="BGGR", black_level=170, gains=(1.11, 1.0, 1.44),
-                                  matrix="saturation", gamma=1.0,
-                                  saturation=1e9).process(raw)[12, 12])
-    assert tinted is not None
+    untouched = isp.Isp(pattern="BGGR", black_level=170, gains=(1.11, 1.0, 1.44),
+                        matrix="saturation", gamma=1.0, highlights="off")
+    assert np.array_equal(pipe.process(raw)[12, 12], untouched.process(raw)[12, 12])
 
 
-def test_the_clip_spreads_as_far_as_the_demosaic_reaches():
-    # One clipped site contaminates the neighbours it is interpolated into, so the mask has
-    # to cover them too -- but no further.
-    raw = np.full((16, 16), 300, np.uint16)
-    raw[8, 8] = 1023
-    pipe = isp.Isp(pattern="BGGR", gains=(1.2, 1.0, 1.5), matrix="saturation", gamma=1.0)
+def test_one_clipped_channel_is_repaired_without_whitening_the_pixel():
+    """A blue site at the ceiling in an otherwise dark frame is a bright blue speck, and
+    saying so is the point of doing this per channel: red and green still hold good data."""
+    raw = np.full((32, 32), 300, np.uint16)
+    raw[8, 8] = 1023                                     # a (0,0) site: blue, under BGGR
+    pipe = isp.Isp(pattern="BGGR", gains=(1.2, 1.0, 1.5), matrix="none", gamma=1.0,
+                   highlights="reconstruct")
     out = pipe.process(raw)
-    assert tuple(out[8, 8]) == (255, 255, 255)
-    assert tuple(out[7, 7]) == (255, 255, 255)           # inside the 3x3 support
-    assert tuple(out[8, 11]) != (255, 255, 255)          # outside it, untouched
+    plain = isp.Isp(pattern="BGGR", gains=(1.2, 1.0, 1.5), matrix="none", gamma=1.0,
+                    highlights="off").process(raw)
+
+    assert out[8, 8][2] == 255                           # blue: clipped, so at least full
+    assert tuple(out[8, 8]) != (255, 255, 255)           # but the pixel is not whitened
+    assert abs(int(out[8, 8][0]) - int(plain[8, 8][0])) <= 1      # red as measured
+    assert abs(int(out[8, 8][1]) - int(plain[8, 8][1])) <= 1      # green as measured
+    assert np.array_equal(out[8, 12], plain[8, 12])      # and the neighbours untouched
 
 
-def test_the_mono_path_does_not_pay_for_highlight_clipping():
+def test_the_mono_path_does_not_pay_for_highlight_repair():
     raw = np.full((8, 8), 1023, np.uint16)
     pipe = isp.Isp(gamma=1.0)
     pipe.demosaic = False

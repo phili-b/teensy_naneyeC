@@ -342,12 +342,12 @@ def test_the_highlight_switch_reaches_the_isp():
     win.ccm_box.setCurrentIndex(1)                # and the matrix mixes them further
     raw[color.masks("BGGR", raw.shape)["B"]] //= 2
 
-    assert win.chk_highlights.isChecked() and win.isp.highlight_clip
+    assert win.hl_box.currentData() == "reconstruct" == win.isp.highlights
     blown = win._to_display(raw)[0][5, 5]
-    assert tuple(blown) == (255, 255, 255)
+    assert tuple(blown) == (255, 255, 255)        # a neutral blown patch, still neutral
 
-    win.chk_highlights.setChecked(False)
-    assert not win.isp.highlight_clip
+    win.hl_box.setCurrentIndex(0)                 # "leave them"
+    assert win.isp.highlights == "off"
     tinted = win._to_display(raw)[0][5, 5]
-    assert tuple(tinted) != (255, 255, 255)       # the fault this switch exists to fix
+    assert tuple(tinted) != (255, 255, 255)       # the fault this control exists to fix
     win.close()

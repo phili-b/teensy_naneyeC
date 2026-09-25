@@ -48,6 +48,17 @@ WHITE = 1023.0
 # measured 1018-1022 DN on this bench, so a few counts of margin costs nothing real.
 SATURATED = 1015.0
 
+# What to do with pixels that reached it.
+#   "off"          leave them: the tint is visible, and so is where the clipping is
+#   "white"        force them neutral: blunt, and it throws away partial clips
+#   "reconstruct"  estimate the channels that ran out from the ones that did not, then
+#                  roll what is left smoothly to white
+HIGHLIGHT_MODES = ("off", "white", "reconstruct")
+CLIP_AT = 0.995     # fraction of a channel's own ceiling at which it counts as clipped
+KNEE = 0.88         # where the desaturation starts, as a fraction of the ceiling
+BLOCK = 16          # the coarse grid the local hue is measured on
+MIN_SAMPLES = 8     # unclipped pixels a block needs before its colour is trusted
+
 
 def gamma_lut(gamma, size: int = 1024, out_max: int = 255) -> np.ndarray:
     """A 0..size-1 -> 0..out_max table. `gamma=None` gives the sRGB transfer curve."""
@@ -70,7 +81,8 @@ class Isp:
 
     def __init__(self, pattern: str = "BGGR", black_level: float = 0.0,
                  gains=(1.0, 1.0, 1.0), matrix: str = "none", gamma=2.2,
-                 white: float = WHITE, saturation: float = SATURATED):
+                 white: float = WHITE, saturation: float = SATURATED,
+                 highlights: str = "reconstruct"):
         self._pattern = pattern
         self._black = float(black_level)
         self._gains = tuple(float(g) for g in gains)
@@ -79,7 +91,7 @@ class Isp:
         self.white = float(white)
         # Raw level at which the sensor is considered clipped, and what to do about it.
         self.saturation = float(saturation)
-        self.highlight_clip = True
+        self.highlights = highlights
         self.demosaic = True
         self.last_ms = 0.0
         self._shape = None
@@ -131,6 +143,13 @@ class Isp:
         h, w = self._shape
         self._gain_map = np.ascontiguousarray(
             np.tile(tile, (h // 2 + 1, w // 2 + 1))[:h, :w])
+        # What each channel can possibly reach once the gain has been applied: the sensor
+        # clips them all at the same raw value, and the gains scale that apart. This is the
+        # number a channel has to hit before it counts as clipped -- the white point is a
+        # different thing, and capping this by it made a blue gain of 1.44 look like sensor
+        # clipping on every bright blue in the frame.
+        self._ceil = np.array([max((self.saturation - self._black) * g, 1.0)
+                               for g in self._gains], np.float32)
         self._gain_dirty = False
 
     def _prepare(self, shape):
@@ -150,8 +169,13 @@ class Isp:
         self._tmp = np.empty(shape, np.float32)
         self._rgb = np.empty(shape + (3,), np.float32)
         self._idx = np.empty(shape + (3,), np.uint16)
-        self._sat = np.empty(shape, np.float32)
-        self._satmask = np.empty(shape + (1,), bool)
+        self._n = np.empty(shape + (3,), np.float32)       # channel / its own ceiling
+        self._clip = np.empty(shape + (3,), bool)
+        self._whole = np.empty(shape, bool)
+        # The coarse grid the local hue is measured on: the largest block up to BLOCK that
+        # divides the frame, or the whole frame when nothing does.
+        self._block = next((b for b in range(BLOCK, 0, -1)
+                            if shape[0] % b == 0 and shape[1] % b == 0), 1)
         self._ready = True
         self._gain_dirty = True
 
@@ -167,14 +191,12 @@ class Isp:
         if self._gain_dirty:
             self._rebuild_gain_map()
         lin = self._lin
-        # Where the sensor was already at its ceiling, decided before anything scales the
-        # channels apart. This is the only place the fact still exists.
-        clipped = self.highlight_clip and self.demosaic
-        if clipped:
-            np.greater_equal(raw, self.saturation, out=self._satmask[..., 0])
         np.subtract(raw, self._black, out=lin, dtype=np.float32)
         np.multiply(lin, self._gain_map, out=lin)
-        np.clip(lin, 0.0, self.white, out=lin)
+        # Only the floor: a gain may legitimately carry a channel past the white point, and
+        # the display window decides what reaches the screen. Clipping here would truncate
+        # the channel with the largest gain and tint the result, which is the whole bug.
+        np.maximum(lin, 0.0, out=lin)
         if not self.demosaic:
             return lin
         rgb, tmp = self._rgb, self._tmp
@@ -183,22 +205,90 @@ class Isp:
             np.multiply(lin, self._masks[ch], out=tmp)
             box(tmp, out=rgb[..., i])
             np.multiply(rgb[..., i], self._inv[ch], out=rgb[..., i])
+        # One pass over the mosaic answers whether any of this is needed at all, and it
+        # costs a twentieth of a millisecond against the several the stage itself takes.
+        if self.highlights != "off" and raw.max() >= self.saturation:
+            self._fix_highlights(rgb)
         if not self._identity_ccm:
             flat = rgb.reshape(-1, 3)
             np.matmul(flat, self._ccm.T, out=flat)
-            np.clip(rgb, 0.0, self.white, out=rgb)
-        if clipped:
-            # A clipped pixel is neutral by definition: every channel was at the ceiling, so
-            # the only honest colour for it is white. Without this the white balance and the
-            # colour matrix scale the three equal channels apart, each clips separately, and
-            # what comes out is a tint -- pink, with gains of R x1.11 and B x1.44 and the
-            # saturation matrix. The mask is spread through the demosaic's own 3x3 support,
-            # because one clipped site bleeds into the neighbours it interpolates.
-            np.copyto(self._sat, self._satmask[..., 0], casting="unsafe")
-            color.box_full(self._sat, out=self._sat)
-            np.greater(self._sat, 0.0, out=self._satmask[..., 0])
-            np.copyto(rgb, self.white, where=self._satmask)
+            np.maximum(rgb, 0.0, out=rgb)      # the matrix can go negative; the top is the
+                                               # window's business, not ours
         return rgb
+
+    def _fix_highlights(self, rgb: np.ndarray) -> None:
+        """Repair pixels that ran out of sensor, in place and before the colour matrix.
+
+        A blown pixel was equal in all three channels when the sensor clipped it; the white
+        balance then scales them apart and each stops at its own ceiling, so what arrives is
+        a tint. Two stages, and both only ever touch a pixel that actually lost a channel --
+        a legitimately bright colour that did not clip is left exactly as measured.
+
+        **Reconstruct.** Where some channels clipped and others did not, the survivors say
+        how bright the pixel is, and a coarse map of the local colour -- built only from
+        pixels where *every* channel survived, so the ratio between channels means something
+        -- says what colour it should be. The clipped channels are set to that colour at that
+        brightness, never below the ceiling they already reached, which is the sensor's word
+        that they were at least that bright.
+
+        **Roll off.** What is left is faded toward its own brightest channel, by how close
+        the *surviving* channels are to running out too. A pixel with nothing left is fully
+        faded, which is exactly neutral, so a blown highlight ends white; one with headroom
+        in green is barely touched, so a warm highlight stays warm. Driving the fade from the
+        survivors rather than from the result is the trick: do it the other way and the fade
+        whitens the very pixels the reconstruction just saved.
+
+        Everything after the clip test works on the list of damaged pixels rather than the
+        frame, so the cost follows how much of the picture is actually blown. On a frame with
+        nothing clipped it stops at the test.
+        """
+        n, clip = self._n, self._clip
+        np.divide(rgb, self._ceil, out=n)
+        np.greater_equal(n, CLIP_AT, out=clip)
+        hurt = clip.any(axis=2)
+        sel = np.flatnonzero(hurt.reshape(-1))
+        if sel.size == 0:
+            return                       # nothing ran out: the ordinary case, and cheap
+
+        flat_n = n.reshape(-1, 3)
+        flat_rgb = rgb.reshape(-1, 3)
+        pn = flat_n[sel]                                   # (k, 3) the damaged pixels
+        pclip = clip.reshape(-1, 3)[sel]
+        kept = 3 - pclip.sum(axis=1)                       # channels still carrying data
+
+        if self.highlights == "reconstruct":
+            usable = (kept > 0) & (kept < 3)
+            if usable.any():
+                b, (h, w) = self._block, self._shape
+                whole = np.logical_not(hurt, out=self._whole)
+                wf = whole.view(np.uint8).astype(np.float32)
+                num = (n * wf[..., None]).reshape(h // b, b, w // b, b, 3).sum(axis=(1, 3))
+                cnt = wf.reshape(h // b, b, w // b, b).sum(axis=(1, 3))
+                hue = num / np.maximum(cnt, 1.0)[..., None]
+                np.maximum(hue, 1e-3, out=hue)
+                # Look the local colour up per damaged pixel, by which block it is in: no
+                # need to paint the coarse grid back over the whole frame.
+                rows, cols = sel // w, sel % w
+                block = (rows // b) * (w // b) + (cols // b)
+                ph = hue.reshape(-1, 3)[block]
+                trust = (cnt.reshape(-1)[block] >= MIN_SAMPLES) & usable
+                intact = ~pclip
+                scale = ((pn / ph) * intact).sum(axis=1) / np.maximum(kept, 1)
+                want = np.maximum(ph * scale[:, None], 1.0)   # never below the ceiling
+                np.copyto(pn, want, where=pclip & trust[:, None])
+
+        # The fade, measured on the channels that survived: 0 while they have headroom, 1
+        # once they are at their own ceilings or there are none left.
+        t = np.max(pn * ~pclip, axis=1)
+        t = np.clip((t - KNEE) * (1.0 / (1.0 - KNEE)), 0.0, 1.0)
+        t[kept == 0] = 1.0
+        if self.highlights == "white":
+            t[:] = 1.0                                     # the blunt mode, for contrast
+
+        np.multiply(pn, self._ceil, out=pn)
+        mx = pn.max(axis=1, keepdims=True)
+        pn += t[:, None] * (mx - pn)
+        flat_rgb[sel] = pn
 
     def apply_curve(self, lin: np.ndarray) -> np.ndarray:
         """Gamma-curve a linear float32 image (raw units) into 8-bit.
