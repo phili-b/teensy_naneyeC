@@ -546,6 +546,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ccm_box.currentIndexChanged.connect(
             lambda: setattr(self.isp, "matrix", self.ccm_box.currentData()))
 
+        self.chk_highlights = QtWidgets.QCheckBox("blown highlights to white")
+        self.chk_highlights.setChecked(True)
+        self.chk_highlights.setToolTip(
+            "A pixel at the sensor's ceiling was equal in all three channels before the "
+            "white balance scaled them apart. Without this it comes out tinted -- pink, "
+            "with these gains and the saturation matrix.")
+        self.chk_highlights.toggled.connect(
+            lambda on: setattr(self.isp, "highlight_clip", on))
+
         self.lbl_cfa = QtWidgets.QLabel("")
         self.lbl_cfa.setObjectName("caption")
         self.lbl_cfa.setWordWrap(True)
@@ -562,7 +571,8 @@ class MainWindow(QtWidgets.QMainWindow):
         g.addWidget(self.ccm_box, 4, 1, 1, 2)
         g.addWidget(QtWidgets.QLabel("gamma"), 5, 0)
         g.addWidget(self.gamma_box, 5, 1, 1, 2)
-        g.addWidget(self.lbl_cfa, 6, 0, 1, 3)
+        g.addWidget(self.chk_highlights, 6, 0, 1, 3)
+        g.addWidget(self.lbl_cfa, 7, 0, 1, 3)
         self._update_cfa_caption()
         return box
 

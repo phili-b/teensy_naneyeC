@@ -327,3 +327,27 @@ def test_the_window_is_the_same_whatever_the_white_balance_does():
     assert plain == pytest.approx(tuple(want), abs=1.0)
     assert plain[1] > 800, plain                         # not the halved blue channel alone
     win.close()
+
+
+def test_the_highlight_switch_reaches_the_isp():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    win = gui.MainWindow(_RecordingSource(), 12375000)
+    app.processEvents()
+    from naneye import color
+
+    raw = np.full((16, 16), 400, np.uint16)
+    raw[4:8, 4:8] = 1023                          # a blown patch
+    win.sw_rgb.setChecked(True)
+    win.wb_box.setCurrentIndex(2)                 # grey world, so the gains differ
+    win.ccm_box.setCurrentIndex(1)                # and the matrix mixes them further
+    raw[color.masks("BGGR", raw.shape)["B"]] //= 2
+
+    assert win.chk_highlights.isChecked() and win.isp.highlight_clip
+    blown = win._to_display(raw)[0][5, 5]
+    assert tuple(blown) == (255, 255, 255)
+
+    win.chk_highlights.setChecked(False)
+    assert not win.isp.highlight_clip
+    tinted = win._to_display(raw)[0][5, 5]
+    assert tuple(tinted) != (255, 255, 255)       # the fault this switch exists to fix
+    win.close()

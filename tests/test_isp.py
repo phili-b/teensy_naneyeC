@@ -26,8 +26,9 @@ def test_the_fast_kernels_match_the_readable_ones():
 def test_the_demosaic_matches_the_reference_implementation():
     rng = np.random.default_rng(12)
     raw = rng.integers(0, 1024, (32, 32)).astype(np.uint16)
-    fast = isp.Isp(pattern="GRBG", gamma=1.0).linear(raw)
-    assert np.allclose(fast, color.demosaic(raw, "GRBG"), atol=1e-2)
+    pipe = isp.Isp(pattern="GRBG", gamma=1.0)
+    pipe.highlight_clip = False        # that is a separate stage, tested below
+    assert np.allclose(pipe.linear(raw), color.demosaic(raw, "GRBG"), atol=1e-2)
 
 
 def test_black_level_is_subtracted_and_never_goes_negative():
@@ -115,3 +116,45 @@ def _timed(pipe, raw):
     t0 = time.perf_counter()
     pipe.process(raw)
     return (time.perf_counter() - t0) * 1000.0
+
+
+def test_clipped_highlights_come_out_neutral_not_tinted():
+    """The sensor clips every channel at the same raw value; white balance then scales
+    them apart and each clips again, which is what turns a blown highlight pink."""
+    raw = np.full((16, 16), 400, np.uint16)
+    raw[4:8, 4:8] = 1023                      # a blown patch, every Bayer site at the top
+    pipe = isp.Isp(pattern="BGGR", black_level=170, gains=(1.11, 1.0, 1.44),
+                   matrix="saturation", gamma=1.0)
+
+    tinted = pipe.linear(raw)[6, 6].copy()
+    pipe.highlight_clip = False
+    off = pipe.process(raw)[6, 6]
+    assert off[0] != off[1] or off[2] != off[1]          # the fault: a tint, not white
+    pipe.highlight_clip = True
+    on = pipe.process(raw)[6, 6]
+    assert tuple(on) == (255, 255, 255)
+    # and an ordinary pixel is untouched by any of it
+    assert np.array_equal(pipe.process(raw)[12, 12],
+                          isp.Isp(pattern="BGGR", black_level=170, gains=(1.11, 1.0, 1.44),
+                                  matrix="saturation", gamma=1.0,
+                                  saturation=1e9).process(raw)[12, 12])
+    assert tinted is not None
+
+
+def test_the_clip_spreads_as_far_as_the_demosaic_reaches():
+    # One clipped site contaminates the neighbours it is interpolated into, so the mask has
+    # to cover them too -- but no further.
+    raw = np.full((16, 16), 300, np.uint16)
+    raw[8, 8] = 1023
+    pipe = isp.Isp(pattern="BGGR", gains=(1.2, 1.0, 1.5), matrix="saturation", gamma=1.0)
+    out = pipe.process(raw)
+    assert tuple(out[8, 8]) == (255, 255, 255)
+    assert tuple(out[7, 7]) == (255, 255, 255)           # inside the 3x3 support
+    assert tuple(out[8, 11]) != (255, 255, 255)          # outside it, untouched
+
+
+def test_the_mono_path_does_not_pay_for_highlight_clipping():
+    raw = np.full((8, 8), 1023, np.uint16)
+    pipe = isp.Isp(gamma=1.0)
+    pipe.demosaic = False
+    assert pipe.process(raw).ndim == 2

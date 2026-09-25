@@ -44,6 +44,10 @@ MATRICES = {"none": IDENTITY, "saturation": SATURATION, "calibrated": CALIBRATED
 GAMMAS = {"1.0 (linear)": 1.0, "1.8": 1.8, "2.2": 2.2, "sRGB": None}
 WHITE = 1023.0
 
+# Raw level at or above which a pixel is taken to be clipped. The sensor's own ceiling
+# measured 1018-1022 DN on this bench, so a few counts of margin costs nothing real.
+SATURATED = 1015.0
+
 
 def gamma_lut(gamma, size: int = 1024, out_max: int = 255) -> np.ndarray:
     """A 0..size-1 -> 0..out_max table. `gamma=None` gives the sRGB transfer curve."""
@@ -66,13 +70,16 @@ class Isp:
 
     def __init__(self, pattern: str = "BGGR", black_level: float = 0.0,
                  gains=(1.0, 1.0, 1.0), matrix: str = "none", gamma=2.2,
-                 white: float = WHITE):
+                 white: float = WHITE, saturation: float = SATURATED):
         self._pattern = pattern
         self._black = float(black_level)
         self._gains = tuple(float(g) for g in gains)
         self._matrix = matrix
         self._gamma = gamma
         self.white = float(white)
+        # Raw level at which the sensor is considered clipped, and what to do about it.
+        self.saturation = float(saturation)
+        self.highlight_clip = True
         self.demosaic = True
         self.last_ms = 0.0
         self._shape = None
@@ -143,16 +150,28 @@ class Isp:
         self._tmp = np.empty(shape, np.float32)
         self._rgb = np.empty(shape + (3,), np.float32)
         self._idx = np.empty(shape + (3,), np.uint16)
+        self._sat = np.empty(shape, np.float32)
+        self._satmask = np.empty(shape + (1,), bool)
         self._ready = True
         self._gain_dirty = True
 
     # --- the pipeline ------------------------------------------------------------------
     def linear(self, raw: np.ndarray) -> np.ndarray:
-        """Everything up to gamma: (h, w, 3) float32 in raw units, for measurement."""
+        """Everything up to gamma: (h, w, 3) float32 in raw units.
+
+        Clipped highlights are forced to white here (see `highlight_clip`), so this is the
+        display's linear stage rather than a measurement of the scene. What gets measured
+        is the raw mosaic, which nothing in this class modifies.
+        """
         self._prepare(raw.shape)
         if self._gain_dirty:
             self._rebuild_gain_map()
         lin = self._lin
+        # Where the sensor was already at its ceiling, decided before anything scales the
+        # channels apart. This is the only place the fact still exists.
+        clipped = self.highlight_clip and self.demosaic
+        if clipped:
+            np.greater_equal(raw, self.saturation, out=self._satmask[..., 0])
         np.subtract(raw, self._black, out=lin, dtype=np.float32)
         np.multiply(lin, self._gain_map, out=lin)
         np.clip(lin, 0.0, self.white, out=lin)
@@ -168,6 +187,17 @@ class Isp:
             flat = rgb.reshape(-1, 3)
             np.matmul(flat, self._ccm.T, out=flat)
             np.clip(rgb, 0.0, self.white, out=rgb)
+        if clipped:
+            # A clipped pixel is neutral by definition: every channel was at the ceiling, so
+            # the only honest colour for it is white. Without this the white balance and the
+            # colour matrix scale the three equal channels apart, each clips separately, and
+            # what comes out is a tint -- pink, with gains of R x1.11 and B x1.44 and the
+            # saturation matrix. The mask is spread through the demosaic's own 3x3 support,
+            # because one clipped site bleeds into the neighbours it interpolates.
+            np.copyto(self._sat, self._satmask[..., 0], casting="unsafe")
+            color.box_full(self._sat, out=self._sat)
+            np.greater(self._sat, 0.0, out=self._satmask[..., 0])
+            np.copyto(rgb, self.white, where=self._satmask)
         return rgb
 
     def apply_curve(self, lin: np.ndarray) -> np.ndarray:

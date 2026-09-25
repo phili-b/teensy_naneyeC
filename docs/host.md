@@ -190,6 +190,7 @@ black level  ->  white balance  ->  demosaic  ->  colour matrix  ->  gamma
 | Demosaic | bilinear | separable [1,2,1] kernels, weights precomputed once per frame size, no allocation per frame |
 | Colour matrix | one 3×3 | a single `matmul`, which NumPy gives to BLAS |
 | Gamma | 2.2, 1.8, linear or sRGB | a 1024-entry lookup table: an array index, not a power per pixel |
+| Highlight clip | blown pixels forced to white | one comparison on the mosaic, then the demosaic's own 3×3 box to spread it. 0.8 ms |
 
 **Speed is the point, not fidelity** — this is the viewfinder of a measurement camera, and
 the thing that gets recorded and measured is the raw 10-bit mosaic. Measured on the bench
@@ -199,6 +200,26 @@ Colour panel's caption, so it cannot quietly rot.
 
 Not included, deliberately: lens shading, denoise, sharpening, defect correction, local
 tone mapping. None of them would make a measurement truer, and all of them invent data.
+
+### Why blown highlights came out pink
+
+The sensor clips every channel at the same raw value. White balance then multiplies them
+by different gains, each clips separately at the white point, and what was equal is not
+equal any more. With the gains this bench measures — R ×1.11, B ×1.44 — a neutral pixel at
+the ceiling arrives as **R 947, G 853, B 1023**, and the saturation matrix finishes the job
+at **R 963, G 792, B 1023**. That is pink, and no amount of tuning further down the
+pipeline can undo it: the information that all three channels were equal is gone by then.
+
+So it is caught where it still exists. Before anything scales the channels apart, pixels at
+or above `SATURATED` (1015 DN, against a measured sensor ceiling of 1018–1022) are marked
+on the mosaic; after the colour matrix, those pixels are set to white. The mask is spread
+through the same 3×3 support the demosaic uses, because one clipped site bleeds into every
+neighbour it is interpolated into.
+
+Measured on recorded frames from this sensor: blown pixels averaged R 235, G 229, B 255
+before, and R 255, G 255, B 255 after. The *Colour* panel's **blown highlights to white**
+switch turns it off, for anyone who would rather see where the clipping is than have it
+rendered politely.
 
 ### What is honest and what is not
 
