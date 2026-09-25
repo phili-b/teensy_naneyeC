@@ -71,7 +71,8 @@ the table.*
 | **Link** | *fps received*: frames that arrived over USB intact, per second. *fps displayed*: frames painted. Link lock state, *failed rows*, *concealed px*, *lost on PC* (left the device, never arrived intact), *dropped by device* (skipped by the firmware because the PC had not taken the previous frame yet), frame counter, SCLK |
 | **Acquisition** | Clock rate, Start, Stop, Pause, auto contrast, Save frame (16-bit PNG, raw values). *Start* powers the sensor and streams; *Stop* powers it off |
 | **Exposure and gain** | Sliders for exposure, frame delay, ramp gain and CDS gain, each read out in real units (ms, fps, ×) |
-| **Colour** | The **Mono / RGB** switch, the mosaic, and the ISP: black level, white balance, colour matrix, gamma. The caption says what the device reported and how long the ISP took |
+| **Colour** | The **Mono / RGB** switch, the mosaic, and the ISP: black level, white balance, colour matrix, gamma, highlight repair. The caption says what the device reported and how long the ISP took |
+| **Detail** | Interpolation, denoise and sharpening: the three that trade time for looks, each selectable and each measured in the table below |
 | **Analog settings** | Sliders for the six analog fields, amber when not at the datasheet's recommended value, and a *Datasheet recommended* button. Collapsible |
 | **Illumination** | The NanoBerry's LEDs: on/off, current in 0.1 mA steps with the DAC code it becomes, and the current ceiling (`LEDMAX`, default 20 mA, hardware maximum 44.6 mA). Switching on sends the current first, because the DAC powers up at zero |
 | **Registers** | Both registers decoded field by field; firmware-owned fields grey |
@@ -183,14 +184,47 @@ overrides the first.
 black level  ->  white balance  ->  demosaic  ->  colour matrix  ->  gamma
 ```
 
-| Stage | What it does | Why it is that cheap |
+```
+black level -> white balance -> demosaic -> highlight repair -> colour matrix
+            -> denoise -> sharpen -> gamma
+```
+
+| Stage | Choices | Why it is that cheap |
 |---|---|---|
-| Black level | subtracts a pedestal, clipped at zero | a constant; folded into the white balance multiply |
-| White balance | per-colour gain | applied on the **mosaic**, where there is a quarter of the data, as one multiply by a precomputed gain map |
-| Demosaic | bilinear | separable [1,2,1] kernels, weights precomputed once per frame size, no allocation per frame |
-| Colour matrix | one 3×3 | a single `matmul`, which NumPy gives to BLAS |
-| Gamma | 2.2, 1.8, linear or sRGB | a 1024-entry lookup table: an array index, not a power per pixel |
-| Highlight clip | blown pixels forced to white | one comparison on the mosaic, then the demosaic's own 3×3 box to spread it. 0.8 ms |
+| Black level | a pedestal in DN | a constant; folded into the white balance multiply |
+| White balance | off, grey world once, grey world every frame | applied on the **mosaic**, where there is a quarter of the data, as one multiply by a precomputed gain map |
+| Demosaic | **bilinear** or **gradient corrected** | bilinear is separable [1,2,1] kernels with the weights precomputed; gradient corrected (Malvar-He-Cutler) adds a few fixed taps and no decisions per pixel |
+| Highlight repair | leave, clip to white, **reconstruct** | decided per channel; everything after the test works on the list of damaged pixels, so it follows the damage rather than the frame |
+| Colour matrix | none, saturation, calibrated | a single `matmul`, which NumPy gives to BLAS |
+| Denoise | off, **colour noise**, colour and luma | chroma is smooth where luma is not, so two box passes over three chroma planes cost little and soften nothing |
+| Sharpen | off, **light**, medium, strong | unsharp mask on luma only: one box pass and an add |
+| Gamma | 2.2, 1.8, linear or **sRGB** | a 1024-entry lookup table: an array index, not a power per pixel |
+
+Bold is the default. Measured on a real frame from this sensor, 320 × 320, median of 30:
+
+| | ms a frame |
+|---|---|
+| bare pipeline (bilinear, nothing else) | 2.5 |
+| + gradient-corrected interpolation | +4.2 |
+| + highlight reconstruction | +1.9 |
+| + colour denoise | +1.1 |
+| + colour **and luma** denoise | +3.3 |
+| + sharpen | +0.4 |
+| **the defaults** | **9.8** |
+| everything at maximum | 12.2 |
+
+The budget is 20 ms a frame. What the choices buy, measured live on the sensor by two proxies
+— colour changing at the Bayer pitch, which no scene can do and only a demosaic artefact
+does, and mean luma gradient, which is detail:
+
+| | colour artefacts | detail |
+|---|---|---|
+| bilinear, nothing else | 4.97 | 3.71 |
+| gradient corrected | 3.32 | 5.07 |
+| bilinear + colour denoise | 1.05 | 3.94 |
+| **the defaults** | **1.23** | **5.84** |
+
+Four times fewer colour artefacts and 57 % more detail than plain bilinear, for 4 ms.
 
 **Speed is the point, not fidelity** — this is the viewfinder of a measurement camera, and
 the thing that gets recorded and measured is the raw 10-bit mosaic. Measured on the bench

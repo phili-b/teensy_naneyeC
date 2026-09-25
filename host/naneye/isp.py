@@ -54,10 +54,28 @@ SATURATED = 1015.0
 #   "reconstruct"  estimate the channels that ran out from the ones that did not, then
 #                  roll what is left smoothly to white
 HIGHLIGHT_MODES = ("off", "white", "reconstruct")
+
+# How to turn the mosaic into three channels.
+#   "bilinear"  average the neighbours: the cheapest thing that works
+#   "malvar"    Malvar-He-Cutler, bilinear corrected by the curvature of the colour that
+#               was sampled; measured on a real frame it removes 42 % of the Bayer-pitch
+#               chroma artefacts for about a millisecond more
+DEMOSAIC_METHODS = ("bilinear", "malvar")
+
+# Noise reduction. Colour noise is what dominates a Bayer sensor's speckle and it is also
+# the cheapest to remove, because chroma is smooth almost everywhere that luma is not:
+# blurring it leaves detail alone. The luma option adds an edge-aware average that only
+# includes neighbours close in value, so flat areas smooth and edges do not.
+DENOISE_MODES = ("off", "chroma", "chroma+luma")
+LUMA_SIGMA = 24.0   # DN: how far a neighbour may differ and still be averaged in
+
+# Unsharp masking on luma only, so it cannot introduce colour fringes.
+SHARPEN_AMOUNTS = {"off": 0.0, "light": 0.4, "medium": 0.8, "strong": 1.4}
 CLIP_AT = 0.995     # fraction of a channel's own ceiling at which it counts as clipped
 KNEE = 0.88         # where the desaturation starts, as a fraction of the ceiling
 BLOCK = 16          # the coarse grid the local hue is measured on
 MIN_SAMPLES = 8     # unclipped pixels a block needs before its colour is trusted
+SAMPLE = 4          # ... counted on every SAMPLE-th pixel, in each direction
 
 
 def gamma_lut(gamma, size: int = 1024, out_max: int = 255) -> np.ndarray:
@@ -82,7 +100,8 @@ class Isp:
     def __init__(self, pattern: str = "BGGR", black_level: float = 0.0,
                  gains=(1.0, 1.0, 1.0), matrix: str = "none", gamma=2.2,
                  white: float = WHITE, saturation: float = SATURATED,
-                 highlights: str = "reconstruct"):
+                 highlights: str = "reconstruct", method: str = "malvar",
+                 denoise: str = "off", sharpen: str = "off"):
         self._pattern = pattern
         self._black = float(black_level)
         self._gains = tuple(float(g) for g in gains)
@@ -92,6 +111,9 @@ class Isp:
         # Raw level at which the sensor is considered clipped, and what to do about it.
         self.saturation = float(saturation)
         self.highlights = highlights
+        self.method = method
+        self.denoise = denoise
+        self.sharpen = sharpen
         self.demosaic = True
         self.last_ms = 0.0
         self._shape = None
@@ -172,6 +194,9 @@ class Isp:
         self._n = np.empty(shape + (3,), np.float32)       # channel / its own ceiling
         self._clip = np.empty(shape + (3,), bool)
         self._whole = np.empty(shape, bool)
+        self._y = np.empty(shape, np.float32)
+        self._c = np.empty(shape, np.float32)
+        self._cb = np.empty(shape, np.float32)
         # The coarse grid the local hue is measured on: the largest block up to BLOCK that
         # divides the frame, or the whole frame when nothing does.
         self._block = next((b for b in range(BLOCK, 0, -1)
@@ -198,13 +223,24 @@ class Isp:
         # the channel with the largest gain and tint the result, which is the whole bug.
         np.maximum(lin, 0.0, out=lin)
         if not self.demosaic:
+            if SHARPEN_AMOUNTS.get(self.sharpen, 0.0):
+                self._prepare(raw.shape)
+                blur = color.box_full(lin, out=self._cb)
+                np.multiply(blur, 1.0 / 16.0, out=blur)
+                np.subtract(lin, blur, out=blur)
+                np.multiply(blur, SHARPEN_AMOUNTS[self.sharpen], out=blur)
+                np.add(lin, blur, out=lin)
+                np.maximum(lin, 0.0, out=lin)
             return lin
         rgb, tmp = self._rgb, self._tmp
-        for i, (ch, box) in enumerate((("R", color.box_full), ("G", color.box_cross),
-                                       ("B", color.box_full))):
-            np.multiply(lin, self._masks[ch], out=tmp)
-            box(tmp, out=rgb[..., i])
-            np.multiply(rgb[..., i], self._inv[ch], out=rgb[..., i])
+        if self.method == "malvar":
+            np.copyto(rgb, color.demosaic_malvar(lin, self._pattern))
+        else:
+            for i, (ch, box) in enumerate((("R", color.box_full), ("G", color.box_cross),
+                                           ("B", color.box_full))):
+                np.multiply(lin, self._masks[ch], out=tmp)
+                box(tmp, out=rgb[..., i])
+                np.multiply(rgb[..., i], self._inv[ch], out=rgb[..., i])
         # One pass over the mosaic answers whether any of this is needed at all, and it
         # costs a twentieth of a millisecond against the several the stage itself takes.
         if self.highlights != "off" and raw.max() >= self.saturation:
@@ -214,7 +250,73 @@ class Isp:
             np.matmul(flat, self._ccm.T, out=flat)
             np.maximum(rgb, 0.0, out=rgb)      # the matrix can go negative; the top is the
                                                # window's business, not ours
+        if self.denoise != "off":
+            self._reduce_noise(rgb)
+        if SHARPEN_AMOUNTS.get(self.sharpen, 0.0):
+            self._unsharp(rgb)
         return rgb
+
+    # --- detail ------------------------------------------------------------------------
+    @staticmethod
+    def _luma(rgb: np.ndarray, out=None) -> np.ndarray:
+        """(R + 2G + B) / 4: the cheap luma, and the one the Bayer grid samples densest."""
+        y = np.add(rgb[..., 1], rgb[..., 1], out=out)
+        np.add(y, rgb[..., 0], out=y)
+        np.add(y, rgb[..., 2], out=y)
+        return np.multiply(y, 0.25, out=y)
+
+    def _reduce_noise(self, rgb: np.ndarray) -> None:
+        """Blur the colour, keep the detail; optionally smooth flat luma as well.
+
+        Splitting into luma and three chroma planes costs a few adds, and after that the
+        noise that shows -- coloured speckle -- is in planes that are smooth almost
+        everywhere the picture is not. A single 3x3 pass over them is enough to see the
+        difference, and it cannot soften an edge, because every edge is in the luma.
+        """
+        y = self._luma(rgb, out=self._y)
+        for i in range(3):
+            c = np.subtract(rgb[..., i], y, out=self._c)
+            # Two passes, so the support is about 5x5: one pass leaves too much of the
+            # speckle, and chroma can take as much blur as you care to give it.
+            color.box_full(c, out=self._cb)
+            color.box_full(self._cb, out=self._c)
+            np.multiply(self._c, 1.0 / 256.0, out=self._c)    # box_full sums to 16, twice
+            np.add(y, self._c, out=rgb[..., i])
+        if self.denoise == "chroma+luma":
+            # An edge-aware average: a neighbour joins in only if it is within LUMA_SIGMA
+            # of the centre, so a flat area smooths and an edge is left where it is.
+            acc, wsum = np.copy(y), np.ones_like(y)
+            p = np.pad(y, 1, mode="edge")
+            h, w = y.shape
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    if dy == 0 and dx == 0:
+                        continue
+                    nb = p[1 + dy:1 + dy + h, 1 + dx:1 + dx + w]
+                    near = np.abs(nb - y) < LUMA_SIGMA
+                    acc += np.where(near, nb, 0.0)
+                    wsum += near
+            np.divide(acc, wsum, out=acc)
+            np.subtract(acc, y, out=acc)               # how much the luma moved
+            for i in range(3):
+                rgb[..., i] += acc
+
+    def _unsharp(self, rgb: np.ndarray) -> None:
+        """Unsharp mask on luma, added to all three channels equally.
+
+        Sharpening each channel separately would sharpen the demosaic's own guesses and
+        bring back the coloured fringes the interpolation works to avoid. Adding one luma
+        correction to all three moves the edge without touching the colour.
+        """
+        amount = SHARPEN_AMOUNTS[self.sharpen]
+        y = self._luma(rgb, out=self._y)
+        blur = color.box_full(y, out=self._cb)
+        np.multiply(blur, 1.0 / 16.0, out=blur)
+        np.subtract(y, blur, out=blur)                 # the detail the blur removed
+        np.multiply(blur, amount, out=blur)
+        for i in range(3):
+            rgb[..., i] += blur
+        np.maximum(rgb, 0.0, out=rgb)
 
     def _fix_highlights(self, rgb: np.ndarray) -> None:
         """Repair pixels that ran out of sensor, in place and before the colour matrix.
@@ -261,9 +363,15 @@ class Isp:
             if usable.any():
                 b, (h, w) = self._block, self._shape
                 whole = np.logical_not(hurt, out=self._whole)
-                wf = whole.view(np.uint8).astype(np.float32)
-                num = (n * wf[..., None]).reshape(h // b, b, w // b, b, 3).sum(axis=(1, 3))
-                cnt = wf.reshape(h // b, b, w // b, b).sum(axis=(1, 3))
+                # Every SAMPLE-th pixel is plenty for a colour that is about to be averaged
+                # over a whole block, and it makes this the cheap part instead of the
+                # expensive one.
+                k = SAMPLE if b % SAMPLE == 0 else 1
+                wf = whole[::k, ::k].astype(np.float32)
+                ns = n[::k, ::k]
+                bh, bw, sb = h // b, w // b, b // k
+                num = (ns * wf[..., None]).reshape(bh, sb, bw, sb, 3).sum(axis=(1, 3))
+                cnt = wf.reshape(bh, sb, bw, sb).sum(axis=(1, 3))
                 hue = num / np.maximum(cnt, 1.0)[..., None]
                 np.maximum(hue, 1e-3, out=hue)
                 # Look the local colour up per damaged pixel, by which block it is in: no
@@ -271,7 +379,7 @@ class Isp:
                 rows, cols = sel // w, sel % w
                 block = (rows // b) * (w // b) + (cols // b)
                 ph = hue.reshape(-1, 3)[block]
-                trust = (cnt.reshape(-1)[block] >= MIN_SAMPLES) & usable
+                trust = (cnt.reshape(-1)[block] >= MIN_SAMPLES / (k * k)) & usable
                 intact = ~pclip
                 scale = ((pn / ph) * intact).sum(axis=1) / np.maximum(kept, 1)
                 want = np.maximum(ph * scale[:, None], 1.0)   # never below the ceiling

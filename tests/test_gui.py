@@ -335,19 +335,26 @@ def test_the_highlight_switch_reaches_the_isp():
     app.processEvents()
     from naneye import color
 
-    raw = np.full((16, 16), 400, np.uint16)
-    raw[4:8, 4:8] = 1023                          # a blown patch
+    raw = np.full((32, 32), 400, np.uint16)
+    raw[color.masks("BGGR", raw.shape)["B"]] //= 2   # a blue cast, so grey world has work
+    raw[8:12, 8:12] = 1023                        # and a blown patch, neutral at the top
     win.sw_rgb.setChecked(True)
     win.wb_box.setCurrentIndex(2)                 # grey world, so the gains differ
     win.ccm_box.setCurrentIndex(1)                # and the matrix mixes them further
-    raw[color.masks("BGGR", raw.shape)["B"]] //= 2
+    win.denoise_box.setCurrentIndex(0)            # and nothing else in the way
+    win.sharpen_box.setCurrentIndex(0)
 
     assert win.hl_box.currentData() == "reconstruct" == win.isp.highlights
-    blown = win._to_display(raw)[0][5, 5]
-    assert tuple(blown) == (255, 255, 255)        # a neutral blown patch, still neutral
+    win._to_display(raw)
+    repaired = win.isp.linear(raw)[10, 10]
+    assert repaired.max() - repaired.min() < 1.0  # neutral, which is what white means here
 
     win.hl_box.setCurrentIndex(0)                 # "leave them"
     assert win.isp.highlights == "off"
-    tinted = win._to_display(raw)[0][5, 5]
-    assert tuple(tinted) != (255, 255, 255)       # the fault this control exists to fix
+    win._to_display(raw)
+    # The tint lives in the linear image. On screen it may or may not survive the display
+    # window -- a blown pixel is usually above it and clips to white either way -- so this
+    # is asserted where the fault actually is.
+    tinted = win.isp.linear(raw)[10, 10]
+    assert tinted.max() - tinted.min() > 50.0     # the fault this control exists to fix
     win.close()

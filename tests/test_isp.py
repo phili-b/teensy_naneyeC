@@ -26,7 +26,7 @@ def test_the_fast_kernels_match_the_readable_ones():
 def test_the_demosaic_matches_the_reference_implementation():
     rng = np.random.default_rng(12)
     raw = rng.integers(0, 1024, (32, 32)).astype(np.uint16)
-    pipe = isp.Isp(pattern="GRBG", gamma=1.0, highlights="off")   # a separate stage
+    pipe = isp.Isp(pattern="GRBG", gamma=1.0, highlights="off", method="bilinear")
     assert np.allclose(pipe.linear(raw), color.demosaic(raw, "GRBG"), atol=1e-2)
 
 
@@ -142,11 +142,13 @@ def test_one_clipped_channel_is_repaired_without_whitening_the_pixel():
     saying so is the point of doing this per channel: red and green still hold good data."""
     raw = np.full((32, 32), 300, np.uint16)
     raw[8, 8] = 1023                                     # a (0,0) site: blue, under BGGR
+    # Bilinear here on purpose: a gradient-corrected interpolation rings around an
+    # isolated spike, which is its own story and not this one.
     pipe = isp.Isp(pattern="BGGR", gains=(1.2, 1.0, 1.5), matrix="none", gamma=1.0,
-                   highlights="reconstruct")
+                   highlights="reconstruct", method="bilinear")
     out = pipe.process(raw)
     plain = isp.Isp(pattern="BGGR", gains=(1.2, 1.0, 1.5), matrix="none", gamma=1.0,
-                    highlights="off").process(raw)
+                    highlights="off", method="bilinear").process(raw)
 
     assert out[8, 8][2] == 255                           # blue: clipped, so at least full
     assert tuple(out[8, 8]) != (255, 255, 255)           # but the pixel is not whitened
@@ -160,3 +162,114 @@ def test_the_mono_path_does_not_pay_for_highlight_repair():
     pipe = isp.Isp(gamma=1.0)
     pipe.demosaic = False
     assert pipe.process(raw).ndim == 2
+
+
+def bayer(scene, pattern="BGGR"):
+    """Sample a (h, w, 3) scene through a mosaic, the way the sensor does."""
+    raw = np.zeros(scene.shape[:2], np.uint16)
+    for i, ch in enumerate("RGB"):
+        m = color.masks(pattern, raw.shape)[ch]
+        raw[m] = np.clip(scene[..., i], 0, 1023).astype(np.uint16)[m]
+    return raw
+
+
+def test_gradient_corrected_interpolation_beats_bilinear_on_detail():
+    """Fine detail is where bilinear invents colour. Malvar's correction is the curvature
+    of the colour that was actually sampled, so it knows the scene is changing there."""
+    h = w = 64
+    x = np.arange(w)
+    scene = np.empty((h, w, 3), np.float32)
+    for i, phase in enumerate((0.0, 0.4, 0.8)):
+        scene[..., i] = 500 + 300 * np.sin(x / 3.0 + phase)
+    raw = bayer(scene)
+
+    def error(out):
+        out, ref = out[2:-2, 2:-2], scene[2:-2, 2:-2]     # a 5x5 filter cannot see the edge
+        colour = np.abs((out.max(-1) - out.min(-1)) - (ref.max(-1) - ref.min(-1)))
+        return np.abs(out - ref).mean(), colour.mean()
+
+    plain = error(color.demosaic(raw, "BGGR"))
+    better = error(color.demosaic_malvar(raw, "BGGR"))
+    assert better[0] < plain[0] and better[1] < plain[1], (plain, better)
+    # and it must leave the sampled channels exactly alone, as bilinear does
+    for ch, i in (("R", 0), ("G", 1), ("B", 2)):
+        m = color.masks("BGGR", raw.shape)[ch]
+        assert np.allclose(color.demosaic_malvar(raw, "BGGR")[..., i][m], raw[m])
+
+
+def test_malvar_is_exact_on_smooth_and_flat_scenes():
+    # The correction is a second derivative, so it must vanish where there is no curvature.
+    flat = np.full((32, 32, 3), 500, np.float32)
+    out = color.demosaic_malvar(bayer(flat), "BGGR")
+    assert np.allclose(out, 500.0)
+    ramp = np.repeat(np.broadcast_to(np.linspace(100, 900, 32).astype(np.float32),
+                                     (32, 32))[..., None], 3, axis=2)
+    out = color.demosaic_malvar(bayer(ramp), "BGGR")[3:-3, 3:-3]
+    assert np.abs(out - ramp[3:-3, 3:-3]).max() < 2.0     # only the rounding to uint16
+
+
+def test_denoise_takes_the_colour_noise_and_leaves_the_detail():
+    """Chroma is smooth almost everywhere luma is not, so blurring it removes speckle
+    without softening anything. Measured in a flat patch, which is where noise lives --
+    measure across an edge instead and the demosaic's own false colour swamps the result."""
+    rng = np.random.default_rng(5)
+    h = w = 64
+    scene = np.empty((h, w, 3), np.float32)
+    edge = np.where(np.arange(w) < w // 2, 700.0, 250.0)
+    for i in range(3):
+        scene[..., i] = edge
+    raw = bayer(scene + rng.normal(0, 25, (h, w, 3)))
+
+    def measure(mode):
+        p = isp.Isp(pattern="BGGR", gamma=1.0, method="malvar", denoise=mode,
+                    highlights="off")
+        out = p.linear(raw)
+        flat = out[8:56, 6:26]                    # inside the bright half, clear of the edge
+        whole = out[2:-2, 2:-2].mean(-1)
+        return ((flat - flat.mean(-1, keepdims=True)).std(),      # colour noise
+                flat.mean(-1).std(),                              # luma noise
+                abs(whole[:, w // 2 - 6].mean() - whole[:, w // 2 + 2].mean()))  # the edge
+
+    off, chroma, both = (measure(m) for m in ("off", "chroma", "chroma+luma"))
+    assert chroma[0] < 0.8 * off[0]              # colour noise down by a third or so
+    assert chroma[1] > 0.97 * off[1]             # luma noise untouched: no softening
+    assert chroma[2] > 0.99 * off[2]             # and the edge is exactly as high
+    assert both[1] < 0.9 * off[1]                # the luma option does smooth luma
+    assert both[2] > 0.99 * off[2]               # still without rounding off the edge
+
+
+def test_sharpen_lifts_detail_without_touching_colour():
+    h = w = 48
+    scene = np.empty((h, w, 3), np.float32)
+    edge = np.where(np.arange(w) < w // 2, 650.0, 300.0)
+    for i in range(3):
+        scene[..., i] = edge
+    raw = bayer(scene)
+
+    def measure(amount):
+        p = isp.Isp(pattern="BGGR", gamma=1.0, method="malvar", sharpen=amount,
+                    highlights="off")
+        out = p.linear(raw)[2:-2, 2:-2]
+        luma = out.mean(-1)
+        acutance = np.abs(np.diff(luma, axis=1)).max()
+        chroma = np.abs(out - out.mean(-1, keepdims=True)).mean()
+        return acutance, chroma
+
+    off = measure("off")
+    for amount in ("light", "medium", "strong"):
+        got = measure(amount)
+        assert got[0] > off[0], amount                  # the edge is steeper
+        assert got[1] <= off[1] + 0.5, amount           # and no colour was invented
+    assert measure("strong")[0] > measure("light")[0]
+
+
+def test_every_stage_together_stays_inside_the_frame_budget():
+    raw = np.random.default_rng(6).integers(0, 1024, (320, 320)).astype(np.uint16)
+    raw[80:160, 80:160] = 1023                          # give the highlight stage work too
+    pipe = isp.Isp(pattern="BGGR", black_level=170, gains=(1.11, 1.0, 1.44),
+                   matrix="saturation", gamma=None, highlights="reconstruct",
+                   method="malvar", denoise="chroma+luma", sharpen="strong")
+    for _ in range(3):
+        pipe.process(raw)
+    best = min(_timed(pipe, raw) for _ in range(5))
+    assert best < 20.0, f"{best:.1f} ms a frame with everything on"

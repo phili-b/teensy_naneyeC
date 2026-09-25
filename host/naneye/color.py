@@ -184,3 +184,74 @@ def to_display(raw: np.ndarray, pattern: str, gains=None, white: float = 1023.0)
     if gains is not None:
         rgb = apply_gains(rgb, gains)
     return np.clip(rgb, 0, white)
+
+
+# --- gradient-corrected interpolation ---------------------------------------------------
+# Malvar-He-Cutler (ICASSP 2004): bilinear, plus a correction taken from the second
+# derivative of the colour this pixel *did* sample. Where bilinear averages across an edge
+# and smears it, this notices that the sampled colour is changing and corrects the
+# interpolated ones by the same amount, which is what removes most of the zippering and the
+# coloured fringes. Still one pass of fixed taps -- no gradients to test, no decisions per
+# pixel -- so it stays a couple of dozen shifted adds.
+#
+# The three 5x5 kernels below are the paper's, all over 8. Two of them are symmetric and
+# reduce to "bilinear plus a weighted Laplacian at +-2"; the third, interpolating red or
+# blue at a green site, is **directional** -- it leans along the row that carries the colour
+# being estimated. Approximating that one with a symmetric Laplacian measurably makes the
+# false colour worse, which is how this code found out.
+#
+#   G at R or B        R at B (and B at R)      R at G in an R row (and B at G in a B row)
+#    0  0 -1  0  0      0   0 -1.5  0   0       0    0   0.5  0    0
+#    0  0  2  0  0      0   2   0   2   0       0   -1    0  -1    0
+#   -1  2  4  2 -1     -1.5 0   6   0 -1.5     -1    4    5   4   -1
+#    0  0  2  0  0      0   2   0   2   0       0   -1    0  -1    0
+#    0  0 -1  0  0      0   0 -1.5  0   0       0    0   0.5  0    0
+
+
+def demosaic_malvar(raw: np.ndarray, pattern: str = "BGGR") -> np.ndarray:
+    """Gradient-corrected linear interpolation -> (h, w, 3) float32.
+
+    Same interface as `demosaic()` and the same cost class -- roughly twice bilinear, which
+    at 320x320 is a millisecond or two. Sharper edges, far less of the coloured fringing
+    bilinear leaves on high-contrast detail. Sampled channels come through untouched, as
+    they do in bilinear: the mosaic's own values are never an estimate.
+    """
+    if raw.ndim != 2:
+        raise ValueError(f"expected one plane, got shape {raw.shape}")
+    h, w = raw.shape
+    a = raw.astype(np.float32)
+    p = np.pad(a, 2, mode="edge")
+
+    def sh(dy, dx):
+        """The frame shifted by (dy, dx), edges replicated."""
+        return p[2 + dy:2 + dy + h, 2 + dx:2 + dx + w]
+
+    cross = sh(-1, 0) + sh(1, 0) + sh(0, -1) + sh(0, 1)
+    diag = sh(-1, -1) + sh(-1, 1) + sh(1, -1) + sh(1, 1)
+    horiz, vert = sh(0, -1) + sh(0, 1), sh(-1, 0) + sh(1, 0)
+    h2, v2 = sh(0, -2) + sh(0, 2), sh(-2, 0) + sh(2, 0)
+    far = h2 + v2
+
+    g_at_rb = (4.0 * a + 2.0 * cross - far) * 0.125
+    rb_at_opposite = (6.0 * a + 2.0 * diag - 1.5 * far) * 0.125
+    # Along the row: the colour being estimated sits to the left and right.
+    rb_at_g_row = (5.0 * a + 4.0 * horiz - diag - h2 + 0.5 * v2) * 0.125
+    # Down the column: the same filter turned on its side.
+    rb_at_g_col = (5.0 * a + 4.0 * vert - diag - v2 + 0.5 * h2) * 0.125
+
+    m = masks(pattern, raw.shape)
+    where = sites(pattern)
+    # Which green sites share a row with red: there, red is the horizontal neighbour and
+    # blue the vertical one, and the two directional filters swap over.
+    r_row = where["R"][0][0]
+    y = np.arange(h)[:, None]
+    g_with_r = m["G"] & ((y & 1) == r_row)
+    g_with_b = m["G"] & ((y & 1) != r_row)
+
+    rgb = np.empty((h, w, 3), np.float32)
+    rgb[..., 0] = np.select([m["R"], m["B"], g_with_r, g_with_b],
+                            [a, rb_at_opposite, rb_at_g_row, rb_at_g_col])
+    rgb[..., 1] = np.where(m["G"], a, g_at_rb)
+    rgb[..., 2] = np.select([m["B"], m["R"], g_with_b, g_with_r],
+                            [a, rb_at_opposite, rb_at_g_row, rb_at_g_col])
+    return rgb
