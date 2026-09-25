@@ -90,9 +90,10 @@ about a third of the training, which is discarded anyway.
 turns it back on. `tools/link_quality.py` measures the word error rate at every sampling
 point on pixel data, for when the answer needs checking.
 
-The datasheet's shorter sequence (AN000611: a single idle-off write) is still available as
-`START AN` for comparison. On this board it started only sometimes, and its counted phase
-left every row 2 clocks late.
+The datasheet's shorter sequence (AN000611: a single idle-off write) was tried and
+removed. On this board it started only sometimes, and its counted phase left every row
+2 clocks late; keeping a second start sequence that is known to be worse only invites
+someone to use it.
 
 ## One frame, in steady state
 
@@ -249,10 +250,10 @@ words, and that is all. No checksum, no ECC.
    `SYNC_LOST`.
 3. **Conceal what gets through.** A pixel word with broken framing is known to be wrong,
    so `extract_row()` replaces its value with the mean of the nearest intact pixels on the
-   same row, and counts it in `pixels_concealed` (flag `CONCEALED`). `CONCEAL 0` leaves
-   such pixels exactly as received, for measurements that would rather mask them than
-   have them estimated. A row with more than 32 broken words is lost rather than damaged
-   and is not concealed.
+   same row, and counts it in `pixels_concealed` (flag `CONCEALED`). A row with more than
+   32 broken words is lost rather than damaged and is not concealed. Anything that would
+   rather have the bad pixels than an estimate of them has the count in the header and can
+   discard the frame.
 4. **Recover.** A capture that fails outright (the hardware stops responding) triggers a
    full re-start, which power-cycles the sensor. If the firmware itself hangs, the
    [watchdog](#watchdog) resets the Teensy.
@@ -260,16 +261,17 @@ words, and that is all. No checksum, no ECC.
 What cannot be done: an error in one of a word's ten data bits leaves its framing intact,
 so it cannot be detected, let alone corrected. The defence against those is layer 1.
 
-To exercise layers 2 and 3 on a clean link, `INJECT n` corrupts n random pixel words per
-frame after they are received: start bit knocked out, data scrambled, as a real bit error
-would look. With 500 per frame at 49.5 MHz, every one was detected and concealed:
+Layers 2 and 3 were measured with a fault-injection hook, since removed, that corrupted
+n random pixel words per frame after they were received: start bit knocked out, data
+scrambled, as a real bit error looks. With 500 per frame at 49.5 MHz, every one was
+detected and concealed:
 
 ![Error concealment on one row](images/concealment.png)
 
 | 500 corrupt words per frame | mean \|difference\| from a clean frame | pixels more than 100 DN off |
 |---|---|---|
-| `CONCEAL 0`, as received | 3.64 DN | 416 |
-| `CONCEAL 1` (default) | 2.08 DN, against 1.80 DN of ordinary frame-to-frame noise | 3 |
+| left as received | 3.64 DN | 416 |
+| concealed | 2.08 DN, against 1.80 DN of ordinary frame-to-frame noise | 3 |
 
 `SELFTEST` checks concealment too, on the golden row with one word broken on purpose.
 
@@ -321,15 +323,9 @@ them is needed for normal streaming. All except `ID` and `SELFTEST` need streami
 | `PROBE [rows]` | A phase-correct frame cycle reporting word statistics instead of an image | Checking an already-running link without disturbing its phase |
 | `LISTEN [rows]` | Clocks up to 2000 rows with SDAT released and classifies each one: `.` zeros, `A` 0xAAA, `S` 0x555, `P` pixels, `?` mixed. Prints a run-length map, e.g. `Ax3 Px320 ? . Sx4 Px320` | Finding out what the sensor is doing, with no assumptions about phase. Never drives SDAT, so it is always safe |
 | `START REF [VERBATIM] [FAST] [EARLY] [FIRST] [rows]` | The reference host's start sequence, then (with `rows`) a gapless `LISTEN`. `VERBATIM` uses the reference's exact register values, `FAST` sends the first write pair at SCLK rate instead of bit-banged, `EARLY` releases SDAT straight after the idle-off write, `FIRST` stops after the idle-on pair | Bisecting a start-up that does not start |
-| `START AN` | AN000611's single-write sequence. Known not to work reliably on this board (and 2 clocks off when it does); kept for comparison | Re-testing that finding |
-| `ALIGN n` | Alignment clocks used by `START AN` (datasheet: 10) | Only with `START AN` |
-| `CLKMEAS` | Measures SCLK on the pin, sensor off | After touching the clock tree |
 | `CAL 0` / `CAL 1` | Sampling-point calibration at `START` off or on (default on) | Forcing a sampling point for an experiment |
 | `SAMPLE 0` / `1`, `PHASE 0` / `1` | Sampling point by hand: delayed or not, rising or falling edge. Turns calibration off | With `tools/link_quality.py` |
 | `HYS 0` / `HYS 1` | Schmitt-trigger input on the receive pin | Slow or noisy edges (made no difference on the bench) |
-| `CONCEAL 0` / `CONCEAL 1` | Leave corrupt pixels as received, or replace them (default) | Measurements that mask bad pixels themselves |
-| `INJECT n` | Corrupt n random pixel words per frame (0 = off) | Testing detection and concealment |
-| `WDTEST` | Hangs on purpose; the watchdog must reset the board within 2 s. The only command that succeeds by making the device disappear | Proving the watchdog still works |
 
 Host-side companions, all driving the Saleae through its MCP server:
 

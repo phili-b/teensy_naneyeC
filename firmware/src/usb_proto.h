@@ -21,7 +21,9 @@ enum Type : uint8_t {
 };
 
 enum Format : uint8_t {
-    FMT_GRAY8 = 0,   // 1 byte per pixel, 10-bit truncated to 8
+    // 0 was FMT_GRAY8, one byte per pixel with the low two bits thrown away. Nothing asked
+    // for it once 10-bit worked, so the device no longer produces it; the host still decodes
+    // it, and the number stays retired so old recordings keep their meaning.
     FMT_GRAY10 = 1,  // packed, 5 bytes per 4 pixels
     FMT_RAW12 = 2,   // raw pixel periods, 2 bytes each, for diagnostics
 };

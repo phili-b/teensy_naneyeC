@@ -55,16 +55,9 @@ uint32_t sclk_hz();
 uint32_t nominal_sclk_hz();
 // The LPSPI root clock decoded from CBCMR (should be 99 MHz).
 uint32_t lpspi_root_hz();
-// SCLK measured by timing real clock cycles against the CPU cycle counter. Returns 0 if
-// the sensor is powered (the clocks would advance it) or the peripheral stalls.
-uint32_t measure_sclk_hz();
-
 // Delay the input sampling point by one LPSPI functional-clock cycle (CFGR1[SAMPLE]).
 // Intended as a timing knob for the higher clock rates; see spec.md R2.
 void set_delayed_sample(bool on);
-// Bring-up: clocks between the idle-off write and INITIAL PRE-SYNC (datasheet: 10).
-void set_align_clocks(uint32_t n);
-uint32_t align_clocks();
 bool delayed_sample();
 // Sample received data on the falling SCLK edge instead of the rising one (TCR[CPHA], receive
 // transfers only). With set_delayed_sample() this gives four sampling points per bit.
@@ -81,13 +74,6 @@ struct SampleCal {
     uint32_t verify_bad_words;
 };
 const SampleCal& sample_calibration();
-// Replace pixel words with broken framing by their neighbours' mean (default), or leave
-// them as received. Either way they are counted in the frame header.
-void set_conceal(bool on);
-bool conceal();
-// Test hook: corrupt this many random pixel words per captured frame (0 = off).
-void set_inject(uint32_t per_frame);
-uint32_t inject();
 void set_auto_sample(bool on);
 bool auto_sample();
 // Schmitt-trigger input on the receive pin.
@@ -98,20 +84,16 @@ void set_config(uint16_t cfg0, uint16_t cfg1);
 uint16_t config0();
 uint16_t config1();
 
-// Run the power-on sequence up to the point where the sensor is streaming, per AN000611
-// section 3.3: activation clock, register writes, alignment clocks, then the initial
-// pre-sync / sync / delay phases and the first (discarded) frame.
+// Run the power-on sequence up to the point where the sensor is streaming: activation
+// clock, register writes with idle on and then off, the pre-sync / sync / delay phases, the
+// sampling calibration and the row lock, then the rest of the first (discarded) frame.
 //
 // The first 328 PP of INITIAL PRE-SYNC are received rather than discarded and checked for
 // the training pattern. With require_sensor (the default) start() fails if fewer than half
 // of them are training words, so a missing or unpowered sensor is reported instead of
 // streaming zeros. require_sensor=false streams regardless, for exercising the USB path
 // with no camera attached.
-//
-// an_sequence follows AN000611 section 3.3 literally: a single CONFIG_0/CONFIG_1 pair with
-// idle already off. The default instead writes idle on first and then off, as the
-// reference host did.
-bool start(bool require_sensor = true, bool an_sequence = false);
+bool start(bool require_sensor = true);
 
 // How many power-on attempts the last start needed, and how many false row-lock
 // candidates it stepped over. Both are 0 until the first start.

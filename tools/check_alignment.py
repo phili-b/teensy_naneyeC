@@ -1,7 +1,6 @@
 """Measure how the firmware's row transfers line up with the rows the sensor actually sends.
 
     uv run python tools/check_alignment.py                 # START, stream ~0.4 s
-    uv run python tools/check_alignment.py --start "START AN"
 
 Triggers the Saleae on NanEye_EN, sends the start command, lets the firmware stream, then
 compares, on pin 1 (what the Teensy receives):

@@ -72,7 +72,7 @@ def main(argv=None):
     ap.add_argument("--frames", type=int, default=100)
     ap.add_argument("--seconds", type=float, default=None,
                     help="record for this long instead of a frame count")
-    ap.add_argument("--depth", type=int, default=10, choices=(8, 10, 12))
+    ap.add_argument("--depth", type=int, default=10, choices=(10, 12))
     ap.add_argument("--clock", type=int, default=49500000,
                     help="SCLK: 49500000 (default, ~35 fps), 24750000 or 12375000")
     ap.add_argument("--exposure", type=int, default=None,

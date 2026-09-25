@@ -216,7 +216,7 @@ uv run python -m naneye.viewer --source replay                         # no came
 uv run python -m naneye.viewer --source auto --snapshot shot.png       # one frame, no window
 ```
 
-`--depth` selects 10-bit (default), 8-bit or 12 (raw pixel periods, a diagnostic format).
+`--depth` selects 10-bit (default) or 12 (raw pixel periods, a diagnostic format).
 
 ![The viewer streaming live from the sensor](images/viewer-live.png)
 
@@ -311,7 +311,7 @@ Per run:
 
 | File | Contents |
 |---|---|
-| `frames.npy` | `(N, 320, 320)`, `uint16` for 10-bit, `uint8` for 8-bit |
+| `frames.npy` | `(N, 320, 320)`, `uint16` |
 | `meta.csv` | one row per frame: counter, timestamp, exposure, config, drop counters, failed rows, concealed pixels, min/max/mean |
 | `run.json` | settings and a summary: measured fps, frames *dropped by device* and *lost on PC* (kept apart, as in the GUI), failed rows, concealed pixels, and packets the host rejected (`host_bad_crc`, `host_resyncs`) |
 | `stream.bin` | with `--raw`, every packet header |
@@ -413,17 +413,15 @@ frame period to arrive while streaming.
 | `START` | power-cycle the sensor, start it, choose the sampling point, lock onto its rows, check 8 rows, stream (takes ~1.2 s). The reply reports what the calibration measured |
 | `STOP` | stop streaming (the sensor stays powered, in idle) |
 | `POWER 0` / `POWER 1` | sensor power; switching on waits until it has been off ≥ 1 s |
-| `DEPTH 10` / `8` / `12` | packed 10-bit (default), 8-bit, or raw 12-bit pixel periods |
+| `DEPTH 10` / `12` | packed 10-bit (default), or raw 12-bit pixel periods (diagnostic) |
 | `EXP <rows_in_reset> [rows_delay]` | exposure: 0 longest (~102 ms at 12.375 MHz) … 159 shortest (~1.3 ms); `rows_delay` slows the frame rate |
-| `GAIN <ramp_gain> <cds_gain>` | analog gain fields |
 | `REG <reg> <0xHHHH>` (reg 0 or 1) | raw register write, validated |
 | `LED 0` / `LED 1`, `LEDI <mA>`, `LEDMAX <mA>` | illumination: on/off, current (clamped, default ceiling 20 mA), raise the clamp up to 44.6 mA. `LED 1` alone gives almost no light; set `LEDI` first |
-| `CONCEAL 0` / `CONCEAL 1` | leave pixels with broken framing as received, or replace them by their neighbours' mean (default). Either way they are counted |
 | `STATS` | frame counters and link state |
 | `SELFTEST` | check decoding and exposure maths against the embedded reference row |
 
-Diagnostic commands (`LISTEN`, `PROBE`, `START REF`, `START AN`, `ALIGN`, `CLKMEAS`,
-`CAL`, `SAMPLE`, `PHASE`, `HYS`, `INJECT`, `WDTEST`) are described in
+Diagnostic commands (`LISTEN`, `PROBE`, `START REF`, `CAL`, `SAMPLE`, `PHASE`, `HYS`)
+are described in
 [Firmware: diagnostics](firmware.md#diagnostics).
 
 ## Tests
@@ -442,7 +440,7 @@ uv run pytest          # 112 tests, none needing hardware
 | `test_device.py` | the `Device` command/reply logic against a simulated serial port |
 | `test_regs.py` | the register model: field layout, round trips, exposure maths against the firmware and the device |
 | `test_gui.py` | the Qt GUI, headless: loss accounting (device drops vs PC losses), frame hand-over, reconnecting after the port fails, and a smoke test on replayed frames |
-| `test_record.py` | the streaming recorder end to end: `frames.npy` against `meta.csv`, the raw stream, `--no-frames`, 8-bit |
+| `test_record.py` | the streaming recorder end to end: `frames.npy` against `meta.csv`, the raw stream, `--no-frames`, the raw 12-bit format |
 | `test_link_quality.py` | the link-quality analysis: alignment search, framing-error counting, and the limit that data-bit errors are invisible |
 
 Tests needing the 434 MB capture skip cleanly when it is absent. `test_unpack.py` parses the

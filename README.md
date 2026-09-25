@@ -153,9 +153,8 @@ ID                      firmware version, settings, last reset cause (normal / W
 POWER 0|1               sensor LDO enable (on waits for >= 1 s off: the rail is slow)
 CLK 49500000            SCLK: 49500000, 24750000 or 12375000
 START / STOP            begin or end streaming (START power-cycles the sensor first)
-DEPTH 8|10|12           8-bit, packed 10-bit (default), or raw 12-bit pixel periods
+DEPTH 10|12             packed 10-bit (default), or raw 12-bit pixel periods
 EXP <rows_in_reset> [rows_delay]
-GAIN <ramp_gain> <cds_gain>
 REG <0|1> <0xHHHH>      raw register write
 LED 0|1                 illumination on/off
 LEDI <mA>               LED current, clamped (default ceiling 20 mA of 44.6 mA)
@@ -166,8 +165,8 @@ SAMPLE 0|1              sample on the normal or the delayed edge
 LISTEN [rows]           classify what the sensor sends, row by row, SDAT released
 ```
 
-More bring-up diagnostics (`START REF`, `START AN`, `ALIGN`, `CLKMEAS`, `WDTEST`) are
-described in [docs/firmware.md](docs/firmware.md#diagnostics).
+More bring-up diagnostics (`START REF`, `CAL`, `PHASE`, `HYS`) are described in
+[docs/firmware.md](docs/firmware.md#diagnostics).
 
 ## Bring-up order
 

@@ -161,12 +161,11 @@ static uint32_t parse_u32(const char* s, uint32_t dflt) {
 // Verify the unpack path against a row captured from the working reference link, so the
 // decode can be trusted before any image is believed. See tools/make_golden_vector.py.
 static void selftest() {
-    uint8_t gray8[WIDTH];
-    const uint32_t bad = unpack_row_gray8(golden::ROW_WORDS_DATA, gray8);
+    uint16_t px[WIDTH];
+    const uint32_t bad = extract_row(golden::ROW_WORDS_DATA, px);
     uint32_t mismatches = 0;
-    for (uint32_t i = 0; i < WIDTH; i++) {
-        if (gray8[i] != (uint8_t)(golden::EXPECTED_PIXELS[i] >> 2)) mismatches++;
-    }
+    for (uint32_t i = 0; i < WIDTH; i++)
+        if (px[i] != golden::EXPECTED_PIXELS[i]) mismatches++;
     const uint32_t training = count_training(golden::ROW_WORDS_DATA, WORD_TRAINING);
     reply("SELFTEST unpack: bad_words=%lu mismatches=%lu training=%lu/8 -> %s",
           (unsigned long)bad, (unsigned long)mismatches, (unsigned long)training,
@@ -179,17 +178,17 @@ static void selftest() {
         memcpy(row, golden::ROW_WORDS_DATA, sizeof(row));
         const uint32_t victim = 100;
         set_pp(row, TRAINING_PP + victim, 0x7FE);  // start bit 0: framing broken
-        uint16_t px[WIDTH];
+        uint16_t fixed[WIDTH];
         uint32_t concealed = 0;
-        const uint32_t bad2 = extract_row(row, px, &concealed);
+        const uint32_t bad2 = extract_row(row, fixed, &concealed);
         const uint16_t want = (uint16_t)((golden::EXPECTED_PIXELS[victim - 1] +
                                           golden::EXPECTED_PIXELS[victim + 1] + 1u) / 2u);
         uint32_t others = 0;
         for (uint32_t i = 0; i < WIDTH; i++)
-            if (i != victim && px[i] != golden::EXPECTED_PIXELS[i]) others++;
+            if (i != victim && fixed[i] != golden::EXPECTED_PIXELS[i]) others++;
         reply("SELFTEST conceal: bad=%lu concealed=%lu pixel=%u (expect %u) others changed=%lu"
               " -> %s",
-              (unsigned long)bad2, (unsigned long)concealed, px[victim], want,
+              (unsigned long)bad2, (unsigned long)concealed, fixed[victim], want,
               (unsigned long)others,
               (bad2 == 1 && concealed == 1 && px[victim] == want && others == 0) ? "PASS"
                                                                                   : "FAIL");
@@ -266,7 +265,8 @@ static void listen_and_report(uint32_t rows) {
 }
 
 static void handle_command(char* line) {
-    // Split into a verb and up to seven arguments.
+    // Split into a verb and up to seven arguments: "START REF VERBATIM FAST EARLY
+    // FIRST 400" is the longest line anything sends.
     char* tok[8] = {};
     int n = 0;
     for (char* p = strtok(line, " \t"); p && n < 8; p = strtok(nullptr, " \t")) tok[n++] = p;
@@ -281,21 +281,6 @@ static void handle_command(char* line) {
               seim::config0(), seim::config1(), s_format, cfa_name(s_cfa),
               watchdog::last_reset_was_watchdog() ? "WATCHDOG" : "normal",
               (unsigned long)watchdog::reset_status());
-    } else if (!strcmp(tok[0], "CLKMEAS")) {
-        if (s_run || seim::powered()) {
-            reply("CLKMEAS needs the sensor powered off (the clocks would advance it): "
-                  "STOP and POWER 0 first");
-        } else {
-            const uint32_t measured = seim::measure_sclk_hz();
-            const uint32_t expect = seim::nominal_sclk_hz();
-            const int32_t err_ppm =
-                expect ? (int32_t)(((int64_t)measured - expect) * 1000000 / expect) : 0;
-            reply("CLKMEAS measured %lu Hz  nominal %lu Hz  derived %lu Hz  error %+ld ppm "
-                  "(frame gaps make it read slightly low) -> %s",
-                  (unsigned long)measured, (unsigned long)expect,
-                  (unsigned long)seim::sclk_hz(), (long)err_ppm,
-                  (measured && err_ppm > -20000 && err_ppm < 5000) ? "PASS" : "FAIL");
-        }
     } else if (!strcmp(tok[0], "POWER")) {
         // A bare POWER only reports. It used to default to 1, so asking whether the sensor
         // was off turned it on -- which is a poor answer to a question.
@@ -328,15 +313,6 @@ static void handle_command(char* line) {
         }
         reply("SAMPLE %d%s", seim::delayed_sample() ? 1 : 0,
               seim::auto_sample() ? "" : "  (automatic calibration off: CAL 1 to restore)");
-    } else if (!strcmp(tok[0], "INJECT")) {
-        if (n > 1) seim::set_inject(parse_u32(tok[1], 0));
-        reply("INJECT %lu corrupt pixel words per frame (test hook; 0 = off)",
-              (unsigned long)seim::inject());
-    } else if (!strcmp(tok[0], "CONCEAL")) {
-        if (n > 1) seim::set_conceal(parse_u32(tok[1], 1) != 0);
-        reply("CONCEAL %d  (%s)", seim::conceal() ? 1 : 0,
-              seim::conceal() ? "corrupt pixels replaced by their neighbours' mean"
-                              : "corrupt pixels left as received");
     } else if (!strcmp(tok[0], "CAL")) {
         if (n > 1) seim::set_auto_sample(parse_u32(tok[1], 1) != 0);
         reply("CAL %d  (%s)", seim::auto_sample() ? 1 : 0,
@@ -372,13 +348,10 @@ static void handle_command(char* line) {
                   rows ? " (listened with no clock gap)" : ". Now LISTEN.");
             return;
         }
-        bool an = false;
         s_force_start = false;
-        for (int k = 1; k < n; k++) {
+        for (int k = 1; k < n; k++)
             if (!strcasecmp(tok[k], "FORCE")) s_force_start = true;
-            if (!strcasecmp(tok[k], "AN")) an = true;  // AN000611 single-write sequence
-        }
-        if (seim::start(!s_force_start, an)) {
+        if (seim::start(!s_force_start)) {
             s_run = true;
             reply("START ok  streaming  (pre-sync training %lu/%u, attempt %lu, "
                   "%lu false lock candidates)%s",
@@ -411,14 +384,12 @@ static void handle_command(char* line) {
         seim::stop();
         reply("STOP");
     } else if (!strcmp(tok[0], "DEPTH")) {
-        const uint32_t d = parse_u32(tok[1], 8);
-        if (d != 8 && d != 10 && d != 12) {
-            reply("DEPTH must be 8, 10 or 12; unchanged (currently %s)",
-                  s_format == proto::FMT_GRAY10 ? "10" : s_format == proto::FMT_RAW12 ? "12"
-                                                                                      : "8");
+        const uint32_t d = parse_u32(tok[1], 10);
+        if (d != 10 && d != 12) {
+            reply("DEPTH must be 10 (pixels) or 12 (raw pixel periods, diagnostic); "
+                  "unchanged (currently %s)", s_format == proto::FMT_RAW12 ? "12" : "10");
         } else {
-            s_format = (d == 10) ? proto::FMT_GRAY10
-                                 : (d == 12) ? proto::FMT_RAW12 : proto::FMT_GRAY8;
+            s_format = (d == 12) ? proto::FMT_RAW12 : proto::FMT_GRAY10;
             reply("DEPTH %u  payload=%u bytes/frame", d,
                   (unsigned)frame_payload_bytes(s_format));
         }
@@ -445,13 +416,6 @@ static void handle_command(char* line) {
               (unsigned long)((uint64_t)exposure_pp(c0.rows_in_reset, c1.rows_delay) *
                               PP_BITS * 1000000ull / seim::sclk_hz()),
               (unsigned long)seim::sclk_hz());
-    } else if (!strcmp(tok[0], "GAIN")) {
-        Config0 c0 = Config0::unpack(seim::config0());
-        Config1 c1 = Config1::unpack(seim::config1());
-        c0.ramp_gain = (uint8_t)parse_u32(tok[1], c0.ramp_gain) & 3;
-        if (n > 2) c1.cds_gain = (uint8_t)parse_u32(tok[2], c1.cds_gain) & 1;
-        seim::set_config(c0.pack(), c1.pack());
-        reply("GAIN ramp_gain=%u cds_gain=%u", c0.ramp_gain, c1.cds_gain);
     } else if (!strcmp(tok[0], "REG")) {
         const uint32_t addr = parse_u32(tok[1], 0);
         const uint32_t val = parse_u32(tok[2], 0);
@@ -499,19 +463,6 @@ static void handle_command(char* line) {
         } else {
             listen_and_report(parse_u32(tok[1], 400));
         }
-    } else if (!strcmp(tok[0], "WDTEST")) {
-        // Hang on purpose: the watchdog must reset the board within 2 s, after which the
-        // port re-enumerates and ID reports "last reset: WATCHDOG".
-        reply("WDTEST hanging now; expect a watchdog reset in %lu ms",
-              (unsigned long)watchdog::WATCHDOG_TIMEOUT_MS);
-        Serial.flush();
-        seim::power(false);
-        for (;;) {
-        }
-    } else if (!strcmp(tok[0], "ALIGN")) {
-        if (n > 1) seim::set_align_clocks(parse_u32(tok[1], 10));
-        reply("ALIGN %lu clocks between the idle-off write and pre-sync",
-              (unsigned long)seim::align_clocks());
     } else if (!strcmp(tok[0], "STATS")) {
         reply("STATS frames=%lu sent=%lu dropped=%lu streaming=%d powered=%d "
               "end_of_interface=0x%03X",
@@ -521,8 +472,9 @@ static void handle_command(char* line) {
     } else if (!strcmp(tok[0], "SELFTEST")) {
         selftest();
     } else {
-        reply("unknown command '%s'. Try ID POWER CFA CLK CLKMEAS SAMPLE START STOP DEPTH EXP "
-              "GAIN REG LED LEDI LEDMAX PROBE STATS SELFTEST",
+        reply("unknown command '%s'. Try ID POWER CFA CLK START STOP DEPTH EXP REG LED "
+              "LEDI LEDMAX STATS SELFTEST, or the bring-up tools' SAMPLE PHASE HYS CAL "
+              "PROBE LISTEN",
               tok[0]);
     }
 }

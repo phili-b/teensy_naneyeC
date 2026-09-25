@@ -1094,20 +1094,18 @@ def main(argv=None):
                          "recorded stream file")
     ap.add_argument("--clock", type=int, default=DEFAULTS["clock_hz"],
                     help="SCLK: 49500000 (default, ~35 fps), 24750000 or 12375000")
-    ap.add_argument("--depth", type=int, default=10, choices=(8, 10))
     ap.add_argument("--fps", type=float, default=35.0, help="replay rate")
     ap.add_argument("--snapshot", metavar="PATH",
                     help="save a screenshot of the window after --snapshot-after s, then exit")
     ap.add_argument("--snapshot-after", type=float, default=4.0)
     args = ap.parse_args(argv)
 
-    fmt = {8: protocol.FMT_GRAY8, 10: protocol.FMT_GRAY10}[args.depth]
     app = QtWidgets.QApplication([])
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)
-    source = open_source(args.source, depth=args.depth, clock_hz=args.clock, fmt=fmt,
-                         fps=args.fps, start=False)
-    win = MainWindow(source, args.clock, args.depth)
+    source = open_source(args.source, depth=10, clock_hz=args.clock,
+                         fmt=protocol.FMT_GRAY10, fps=args.fps, start=False)
+    win = MainWindow(source, args.clock)
     win.show()
     if args.snapshot:
         def shoot():

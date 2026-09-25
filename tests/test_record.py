@@ -42,6 +42,9 @@ def test_no_frames_writes_metadata_only(tmp_path):
     assert json.load(open(out / "run.json"))["frames_saved"] is False
 
 
-def test_eight_bit(tmp_path):
-    out = run(tmp_path, "--frames", "2", "--depth", "8")
-    assert np.load(out / "frames.npy").dtype == np.uint8
+def test_raw_pixel_periods(tmp_path):
+    # The diagnostic format: whole 12-bit pixel periods, 328 per row including the training
+    # words, which is what the bring-up tools read.
+    out = run(tmp_path, "--frames", "2", "--depth", "12")
+    frames = np.load(out / "frames.npy")
+    assert frames.dtype == np.uint16 and frames.shape == (2, 320, 320)

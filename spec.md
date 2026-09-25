@@ -28,7 +28,7 @@ dropped-frame accounting, deterministic exposure/gain control, and lossless fram
 | D2 | Sensor variant | **Mono / B&W** (confirmed by measurement, §3.4) |
 | D3 | Physical connection | Jumper wires, Teensy ↔ NanoBerry 40-pin RPi header (J2) |
 | D4 | Autonomy | Claude installs the toolchain, builds/flashes from CLI, and drives the Saleae via the Logic 2 automation API |
-| D5 | Bit depth | Runtime-selectable 8-bit / 10-bit |
+| D5 | Bit depth | 10-bit. 8-bit was selectable and nothing ever asked for it; removed 2026-09-25 |
 | D6 | Clock rate | **Start low: 12.375 MHz, then 24.75 MHz.** Higher rates are a stretch goal |
 | D7 | Illumination | On/off **plus DAC current control** (bit-banged, §4.4). Kept minimal: set current in mA, clamped |
 | D8 | Board population | Checked part by part on 2026-09-18. **Fitted:** R19 (EN pull-down), R20 (SCLK 24R), R23 (SDAT 24R). **Not fitted:** R13 and R33, the 10k header pull-downs on SDAT and SCLK, as the schematic's NoBom marking says; firmware substitutes the pads' internal pull-downs (§4.3). The first answer here was "everything is mounted" |
@@ -474,10 +474,10 @@ threshold triggers re-sync. Full validation is cheap and, per §3.1, is expected
 errors in the ten data bits cannot be corrected or even detected; errors that break the
 framing can be detected, and then the value is known to be wrong. Such a pixel is replaced
 by the mean of its nearest intact neighbours on the row and counted in the header
-(`pixels_concealed`, flag `CONCEALED`); `CONCEAL 0` leaves it as received instead. Rows
+(`pixels_concealed`, flag `CONCEALED`). Rows
 with more than 32 broken words are not concealed: that is a lost row, not a damaged one.
 `SYNC_LOST` now means a row's training words failed (the phase is in doubt), not that a
-pixel was damaged. `INJECT n` corrupts n words per frame to test all of this on a clean
+pixel was damaged. A fault-injection hook (since removed) corrupted n words per frame to test all of this on a clean
 link: with 500 per frame, the concealed image differs from a clean one by 2.1 DN on
 average against 1.8 DN of frame-to-frame noise, and 3 pixels stay more than 100 DN off,
 against 416 without concealment.
@@ -487,8 +487,8 @@ against 416 without concealment.
 RTWDOG (WDOG3), 2 s timeout, clocked from the 32 kHz LPO so it survives any PLL mistake.
 Fed from `loop()`, per row in `LISTEN`, and while waiting out a power cycle; the longest
 legitimate blocking operation is ~0.7 s. The reset cause is latched at boot and reported by
-`ID` (`last reset: WATCHDOG`). `WDTEST` hangs on purpose: measured, the port drops after
-1.97 s and is back at 2.25 s. A flash also usually reads as a watchdog reset, because the
+`ID` (`last reset: WATCHDOG`). Measured with a command that hung on purpose (since
+removed): the port drops after 1.97 s and is back at 2.25 s. A flash also usually reads as a watchdog reset, because the
 old image parks in the bootloader hand-off with the watchdog still running — harmless.
 
 ### 6.7 Tuning after bring-up
@@ -528,7 +528,8 @@ offset size field
 16      4   timestamp_us           (ARM cycle counter based)
 20      2   width  = 320
 22      2   height = 320
-24      1   format  0=8-bit, 1=10-bit packed (5 B per 4 px), 2=raw 12-bit PP
+24      1   format  1=10-bit packed (5 B per 4 px), 2=raw 12-bit PP
+                    (0 was 8-bit, retired; the host still decodes it)
 25      1   flags   bit0 sync_lost, bit1 clock_gap, bit2 first_frame_discarded,
                     bit3 concealed, bits4-6 colour filter array (0 mono, 1 BGGR,
                     2 GBRG, 3 GRBG, 4 RGGB; §4.5)
@@ -550,9 +551,8 @@ ID                     → firmware version, chip UID
 POWER 0|1              → Naneye_EN
 CLK 12375000|24750000  → SCLK (also sets matching mclk_mode)
 START / STOP
-DEPTH 8|10|12
+DEPTH 10|12            → 10-bit pixels, or raw pixel periods (diagnostic)
 EXP <rows_in_reset> [rows_delay]
-GAIN <ramp_gain> <cds_gain>
 REG <0|1> <0xHHHH>     → raw register write
 CFA MONO|BGGR|...      → which sensor is fitted; kept in EEPROM, sent in every header
 LED 0|1                → LED_VCC_ON + DAC power-up/down
@@ -651,7 +651,7 @@ tests/          golden decode regression, protocol round-trip
   live on the PC, where changing them costs a restart of a Python process rather than a
   reflash, and where the raw mosaic stays available for measurement.
 - Multi-camera synchronisation.
-- On-Teensy image processing beyond unpacking and optional 10→8-bit reduction.
+- On-Teensy image processing beyond unpacking.
 
 ---
 

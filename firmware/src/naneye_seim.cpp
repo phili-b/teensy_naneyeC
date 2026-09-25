@@ -72,7 +72,6 @@ static DMAChannel s_rx;
 static bool s_powered = false;
 static bool s_streaming = false;
 static bool s_delayed_sample = false;
-static uint32_t s_align_clocks = 10;
 static bool s_first_frame_after_por = true;
 static uint16_t s_cfg0 = REF_CONFIG0;
 static uint16_t s_cfg1 = REF_CONFIG1_IDLE;
@@ -379,25 +378,6 @@ uint32_t sclk_hz() { return lpspi_root_hz() / ((uint32_t)s_clock->sckdiv + 2u); 
 
 uint32_t nominal_sclk_hz() { return s_clock->sclk_hz; }
 
-// Time real SCLK cycles against the CPU cycle counter: an independent check of the clock
-// that needs no logic analyser. Clocks max-size frames with output and input masked, so it
-// includes the small gap between frames and reads a fraction of a percent low.
-//
-// Only with the sensor unpowered: the sensor advances its state machine on these clocks.
-uint32_t measure_sclk_hz() {
-    if (s_powered) return 0;
-    const uint32_t frames = 24;
-    const uint32_t t0 = ARM_DWT_CYCCNT;
-    for (uint32_t i = 0; i < frames; i++) {
-        LPSPI.TCR = tcr_base() | reg::framesz(MAX_FRAME_BITS) | reg::TCR_TXMSK |
-                    reg::TCR_RXMSK;
-        if (!wait_frame()) return 0;
-    }
-    const uint32_t cycles = ARM_DWT_CYCCNT - t0;
-    if (!cycles) return 0;
-    return (uint32_t)((uint64_t)frames * MAX_FRAME_BITS * F_CPU_ACTUAL / cycles);
-}
-
 void set_delayed_sample(bool on) {
     s_delayed_sample = on;
     configure_lpspi();
@@ -416,8 +396,6 @@ void set_input_hysteresis(bool on) {
 }
 bool input_hysteresis() { return (*portControlRegister(board::PIN_SDAT_IN) & IOMUXC_PAD_HYS) != 0; }
 
-void set_align_clocks(uint32_t n) { s_align_clocks = n; }
-uint32_t align_clocks() { return s_align_clocks; }
 
 void set_config(uint16_t cfg0, uint16_t cfg1) {
     s_cfg0 = cfg0;
@@ -786,12 +764,12 @@ static uint32_t s_start_attempts = 0;
 uint32_t start_attempts() { return s_start_attempts; }
 uint32_t lock_false_candidates() { return s_lock_false_candidates; }
 
-bool start(bool require_sensor, bool an_sequence) {
+bool start(bool require_sensor) {
     s_streaming = false;
     s_start_attempts = 1;
     s_lock_false_candidates = 0;
     s_presync_training = 0;
-    // Both sequences need a sensor fresh from power-on reset.
+    // The sequence needs a sensor fresh from power-on reset.
     if (s_powered) power(false);
     power(true);
 
@@ -800,71 +778,22 @@ bool start(bool require_sensor, bool an_sequence) {
     c1.mclk_mode = s_clock->mclk_mode;
     c1.high_speed = s_clock->high_speed;
 
-    if (!an_sequence) {
-        // Locking depends on catching one transition in one pass of the first frame. If it
-        // misses, the only way back to a known state is another power-on reset, so try a
-        // few times before giving up on the sensor.
-        for (uint32_t attempt = 0; attempt < START_ATTEMPTS; attempt++) {
-            if (attempt) {
-                power(false);
-                power(true);
-                s_presync_training = 0;
-            }
-            if (start_like_reference(c1, require_sensor)) {
-                s_start_attempts = attempt + 1;
-                return true;
-            }
+    // Locking depends on catching one transition in one pass of the first frame. If it
+    // misses, the only way back to a known state is another power-on reset, so try a few
+    // times before giving up on the sensor.
+    for (uint32_t attempt = 0; attempt < START_ATTEMPTS; attempt++) {
+        if (attempt) {
+            power(false);
+            power(true);
+            s_presync_training = 0;
         }
-        s_start_attempts = START_ATTEMPTS;
-        return false;
+        if (start_like_reference(c1, require_sensor)) {
+            s_start_attempts = attempt + 1;
+            return true;
+        }
     }
-
-    // AN000611's single-write sequence, kept for comparison only. On hardware it is not
-    // reliable: some starts see no pre-sync at all, and when it does start, the phase count
-    // below lands every row 2 clocks late (tools/check_alignment.py), so every row fails.
-    bitbang_clocks(1, true);  // activation clock, SDAT low as in the reference capture
-
-    // Release idle: the sensor starts streaming after this write.
-    c1.idle_mode = 0;
-    s_cfg1 = c1.pack();
-    bitbang_write24(reg_write_packet(0, s_cfg0));
-    bitbang_write24(reg_write_packet(1, s_cfg1));
-    sdat_hiz();
-
-    // AN000611 section 3.3 waits here -- after the idle-off write, before the alignment
-    // clocks -- "for IDLE start-up", 10 us minimum, "longer times are also possible". This
-    // pause used to sit between the two write pairs instead, so the alignment clocks arrived
-    // about a microsecond after idle was released, while the sensor was still starting up.
-    delayMicroseconds(100);
-
-    // 10 alignment clocks fix the 12-bit word phase, then INITIAL PRE-SYNC MODE. SDAT is
-    // left released: the sensor is already transmitting by this point.
-    bitbang_clocks(s_align_clocks, false);
-
-    // INITIAL PRE-SYNC is 329 PP of training pattern. Receive the first 328 as one row --
-    // this is the only moment the sensor is guaranteed to be sending a known pattern before
-    // any image, so it is where "is there a sensor at all?" gets answered -- and clock the
-    // remaining PP, so the phase count is exactly what it would have been.
-    start_row(s_row[0]);
-    if (!wait_row()) {
-        s_rx.disable();
-        return false;
-    }
-    for (uint32_t i = 0; i < ROW_PP; i++) {
-        const uint16_t w = pp_at(s_row[0], i);
-        if (w == WORD_PRESYNC || w == WORD_TRAINING) s_presync_training++;
-    }
-    if (!clock_pp_discard(PRESYNC_PP - ROW_PP)) return false;
-    if (require_sensor && s_presync_training < ROW_PP / 2) return false;
-
-    // SYNC + DELAY, then the first frame, which is discarded: its exposure is invalid
-    // (confirmed saturated in the reference capture, spec.md section 3.5).
-    if (!clock_pp_discard(sync_delay_pp())) return false;
-    if (!clock_pp_discard(READOUT_PP)) return false;
-
-    s_first_frame_after_por = false;
-    s_streaming = true;
-    return true;
+    s_start_attempts = START_ATTEMPTS;
+    return false;
 }
 
 void stop() {
@@ -876,31 +805,6 @@ void stop() {
 }
 
 bool streaming() { return s_streaming; }
-
-// Fault injection (INJECT): corrupt this many random pixel words per frame after they have
-// been received, as a real bit error would -- start bit knocked out, data scrambled -- so
-// detection, concealment and the counters can be exercised on a clean link.
-static uint32_t s_inject_per_frame = 0;
-static uint32_t s_rng = 0x2545F491u;
-static inline uint32_t xorshift() {
-    s_rng ^= s_rng << 13;
-    s_rng ^= s_rng >> 17;
-    s_rng ^= s_rng << 5;
-    return s_rng;
-}
-void set_inject(uint32_t per_frame) { s_inject_per_frame = per_frame; }
-
-static bool s_conceal = true;
-void set_conceal(bool on) { s_conceal = on; }
-bool conceal() { return s_conceal; }
-uint32_t inject() { return s_inject_per_frame; }
-
-static void inject_errors(uint32_t* row) {
-    const uint32_t n = s_inject_per_frame / HEIGHT +
-                       ((xorshift() % HEIGHT) < s_inject_per_frame % HEIGHT ? 1u : 0u);
-    for (uint32_t k = 0; k < n; k++)
-        set_pp(row, TRAINING_PP + xorshift() % WIDTH, (uint16_t)(xorshift() & 0x7FEu));
-}
 
 bool capture_frame(uint8_t* dst, uint8_t format, FrameInfo& info, IdleFn idle) {
     memset(&info, 0, sizeof(info));
@@ -927,16 +831,14 @@ bool capture_frame(uint8_t* dst, uint8_t format, FrameInfo& info, IdleFn idle) {
         // Arm the next row first, then do the slow work while it is in flight.
         if (r + 1 < HEIGHT) start_row(s_row[(r + 1) & 1]);
 
-        if (s_inject_per_frame) inject_errors(cur);
         bool row_bad = count_training(cur, expect) < TRAINING_PP;
         uint8_t* out = dst + (size_t)r * row_bytes;
         uint32_t bad;
         uint32_t concealed = 0;
-        switch (format) {
-            case 1: bad = unpack_row_gray10(cur, out, &concealed, s_conceal); break;
-            case 2: bad = unpack_row_raw12(cur, out); break;
-            default: bad = unpack_row_gray8(cur, out, &concealed, s_conceal); break;
-        }
+        // format is the wire enum from usb_proto.h, kept as a plain number here so the
+        // driver does not depend on the USB layer: 2 is FMT_RAW12, anything else FMT_GRAY10.
+        bad = (format == 2) ? unpack_row_raw12(cur, out)
+                            : unpack_row_gray10(cur, out, &concealed);
         info.pixels_failed += bad;
         info.pixels_concealed += concealed;
         if (row_bad) info.rows_sync_lost++;
