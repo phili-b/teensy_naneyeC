@@ -21,6 +21,7 @@ correction, local tone mapping. None of them would make a measurement more true.
 """
 
 from __future__ import annotations
+from numpy._typing._nbit_base import _32Bit
 
 import time
 
@@ -28,10 +29,8 @@ import numpy as np
 
 from . import color
 
-# A colour matrix taken from a colour chart is a calibration this project has not done, so
-# the default is honest: none. The alternative is a mild saturation lift, which makes the
-# preview look like a camera rather than like a mosaic, and says nothing true about colour.
-IDENTITY = np.eye(3, dtype=np.float32)
+IDENTITY: np.ndarray[np.floating[_32Bit]] = np.eye(3, dtype=np.float32)
+
 SATURATION = np.array([[1.35, -0.25, -0.10],
                        [-0.20, 1.45, -0.25],
                        [-0.10, -0.35, 1.45]], np.float32)
@@ -71,10 +70,10 @@ LUMA_SIGMA = 24.0   # DN: how far a neighbour may differ and still be averaged i
 
 # Unsharp masking on luma only, so it cannot introduce colour fringes.
 SHARPEN_AMOUNTS = {"off": 0.0, "light": 0.4, "medium": 0.8, "strong": 1.4}
-CLIP_AT = 0.995     # fraction of a channel's own ceiling at which it counts as clipped
-KNEE = 0.88         # where the desaturation starts, as a fraction of the ceiling
+CLIP_AT = 0.99     # fraction of a channel's own ceiling at which it counts as clipped
+KNEE = 0.80         # where the desaturation starts, as a fraction of the ceiling
 BLOCK = 16          # the coarse grid the local hue is measured on
-MIN_SAMPLES = 8     # unclipped pixels a block needs before its colour is trusted
+MIN_SAMPLES = 6     # unclipped pixels a block needs before its colour is trusted
 SAMPLE = 4          # ... counted on every SAMPLE-th pixel, in each direction
 
 
@@ -98,10 +97,10 @@ class Isp:
     """
 
     def __init__(self, pattern: str = "BGGR", black_level: float = 0.0,
-                 gains=(1.0, 1.0, 1.0), matrix: str = "none", gamma=2.2,
+                 gains=(1.0, 1.0, 1.0), matrix: str = "calibrated", gamma=2.2,
                  white: float = WHITE, saturation: float = SATURATED,
-                 highlights: str = "reconstruct", method: str = "malvar",
-                 denoise: str = "off", sharpen: str = "off"):
+                 highlights: str = "white", method: str = "malvar",
+                 denoise: str = "chroma", sharpen: str = "light"):
         self._pattern = pattern
         self._black = float(black_level)
         self._gains = tuple(float(g) for g in gains)
@@ -137,7 +136,7 @@ class Isp:
             self._lut = gamma_lut(self._gamma, size=1024)
         if shape:
             self._ready = False
-        self._ccm = MATRICES.get(self._matrix, IDENTITY)
+        self._ccm = MATRICES.get(self._matrix, CALIBRATED)
         self._identity_ccm = np.array_equal(self._ccm, IDENTITY)
 
     pattern = property(lambda s: s._pattern,
@@ -150,7 +149,7 @@ class Isp:
 
     def _rebuild(self):
         self._lut = gamma_lut(self._gamma, size=1024)
-        self._ccm = MATRICES.get(self._matrix, IDENTITY)
+        self._ccm = MATRICES.get(self._matrix, CALIBRATED)
         self._identity_ccm = np.array_equal(self._ccm, IDENTITY)
         self._gain_dirty = True
         self._ready = False
@@ -384,19 +383,33 @@ class Isp:
                 scale = ((pn / ph) * intact).sum(axis=1) / np.maximum(kept, 1)
                 want = np.maximum(ph * scale[:, None], 1.0)   # never below the ceiling
                 np.copyto(pn, want, where=pclip & trust[:, None])
+                np.copyto(clip.reshape(-1, 3)[sel], False,
+                          where=pclip & trust[:, None])    # repaired: no longer missing
 
-        # The fade, measured on the channels that survived: 0 while they have headroom, 1
-        # once they are at their own ceilings or there are none left.
-        t = np.max(pn * ~pclip, axis=1)
-        t = np.clip((t - KNEE) * (1.0 / (1.0 - KNEE)), 0.0, 1.0)
-        t[kept == 0] = 1.0
-        if self.highlights == "white":
-            t[:] = 1.0                                     # the blunt mode, for contrast
+            np.multiply(pn, self._ceil, out=pn)
+            flat_rgb[sel] = pn                             # the reconstruction, written back
 
-        np.multiply(pn, self._ceil, out=pn)
-        mx = pn.max(axis=1, keepdims=True)
-        pn += t[:, None] * (mx - pn)
-        flat_rgb[sel] = pn
+        # The fade, over the whole frame and with no threshold in it. Fading only the pixels
+        # that crossed a threshold is what left single pixels coloured inside a blown area:
+        # a sensor's ceiling is not one number (1018 to 1022 on this one) and the gradient
+        # corrected interpolation moves interpolated values either side of any line you
+        # draw, so a mask always has holes. A smooth function of the brightness cannot.
+        np.divide(rgb, self._ceil, out=n)
+        if self.highlights == "reconstruct":
+            # Driven by the channels that survived, so a warm highlight with headroom in
+            # green keeps its warmth; where nothing survived, by the brightest channel, so
+            # the pixel still ends neutral.
+            drive = np.max(n * np.logical_not(clip), axis=2)
+            np.copyto(drive, np.max(n, axis=2), where=clip.all(axis=2))
+        else:
+            drive = np.max(n, axis=2)                      # clip to white: purely brightness
+        np.subtract(drive, KNEE, out=drive)
+        np.multiply(drive, 1.0 / (1.0 - KNEE), out=drive)
+        np.clip(drive, 0.0, 1.0, out=drive)
+        mx = np.max(rgb, axis=2)
+        np.subtract(mx[..., None], rgb, out=n)             # reuse n as scratch
+        np.multiply(n, drive[..., None], out=n)
+        np.add(rgb, n, out=rgb)
 
     def apply_curve(self, lin: np.ndarray) -> np.ndarray:
         """Gamma-curve a linear float32 image (raw units) into 8-bit.

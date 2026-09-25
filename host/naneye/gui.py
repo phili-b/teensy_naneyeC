@@ -41,13 +41,16 @@ DEFAULTS = {
     "mosaic": "BGGR",
     "black_level": 170.0,
     "white_balance": "auto",   # grey world, every frame
-    "matrix": "saturation",
+    "matrix": "calibrated",
     "gamma": None,             # None is sRGB, see isp.GAMMAS
-    "highlights": "reconstruct",
+    "highlights": "white",
     "method": "malvar",        # the interpolation; see isp.DEMOSAIC_METHODS
     "denoise": "chroma",       # colour noise only, so detail is untouched
     "sharpen": "light",
 }
+
+# What the host may spend on one frame before the viewer starts dropping them.
+FRAME_BUDGET_MS = 20.0
 
 CLOCKS = ((49500000, "49.5 MHz  (~35 fps)"), (24750000, "24.75 MHz  (~18 fps)"),
           (12375000, "12.375 MHz  (~8 fps)"))
@@ -410,8 +413,7 @@ class MainWindow(QtWidgets.QMainWindow):
         side.setSpacing(10)
         side.addWidget(self._link_box())
         side.addWidget(self._acquisition_box(clock_hz))
-        side.addWidget(self._colour_box())
-        side.addWidget(self._detail_box())
+        side.addWidget(self._image_box())
         side.addWidget(self._exposure_box())
         side.addWidget(self._analog_box())
         side.addWidget(self._led_box())
@@ -498,9 +500,13 @@ class MainWindow(QtWidgets.QMainWindow):
             w.setEnabled(live)
         return box
 
-    def _colour_box(self):
-        """Mono or RGB, which mosaic, and what to do about white balance."""
-        box = self._group("Colour")
+    def _image_box(self):
+        """Everything the host does to a frame: what it is, and what to make of it.
+
+        One panel in pipeline order, because that is the order the stages run in and the
+        order in which one setting explains the next.
+        """
+        box = self._group("Image Processing")
         g = QtWidgets.QGridLayout(box)
         self.sw_mono = QtWidgets.QPushButton("Mono")
         self.sw_rgb = QtWidgets.QPushButton("RGB")
@@ -588,7 +594,10 @@ class MainWindow(QtWidgets.QMainWindow):
         g.addWidget(self.gamma_box, 5, 1, 1, 2)
         g.addWidget(QtWidgets.QLabel("highlights"), 6, 0)
         g.addWidget(self.hl_box, 6, 1, 1, 2)
-        g.addWidget(self.lbl_cfa, 7, 0, 1, 3)
+        for row, (name, widget) in enumerate(self._detail_controls(), start=7):
+            g.addWidget(QtWidgets.QLabel(name), row, 0)
+            g.addWidget(widget, row, 1, 1, 2)
+        g.addWidget(self.lbl_cfa, 10, 0, 1, 3)
         self._update_cfa_caption()
         return box
 
@@ -596,11 +605,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.img is not None:
             self.black.setValue(int(self.isp.measure_black_level(self.img)))
 
-    def _detail_box(self):
+    def _detail_controls(self):
         """Interpolation, noise and sharpening: the three that trade time for looks."""
-        box = self._group("Detail")
-        g = QtWidgets.QGridLayout(box)
-
         def combo(items, default, apply):
             c = QtWidgets.QComboBox()
             for value, label in items:
@@ -629,18 +635,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sharpen_box.setToolTip("Unsharp mask on luma only, so it cannot add colour "
                                     "fringes.")
 
-        self.lbl_detail = QtWidgets.QLabel("")
-        self.lbl_detail.setObjectName("caption")
-        self.lbl_detail.setWordWrap(True)
-        for row, (name, widget) in enumerate((("interpolation", self.method_box),
-                                              ("denoise", self.denoise_box),
-                                              ("sharpen", self.sharpen_box))):
-            g.addWidget(QtWidgets.QLabel(name), row, 0)
-            g.addWidget(widget, row, 1)
-        g.addWidget(self.lbl_detail, 3, 0, 1, 2)
-        self.lbl_detail.setText("every stage is optional; the ISP time in the Colour panel "
-                                "says what they cost")
-        return box
+        return (("interpolation", self.method_box), ("denoise", self.denoise_box),
+                ("sharpen", self.sharpen_box))
 
     def _rgb_toggled(self, on: bool):
         self.rgb_mode = on
@@ -688,7 +684,9 @@ class MainWindow(QtWidgets.QMainWindow):
             method = {"malvar": "gradient-corrected"}.get(self.isp.method, self.isp.method)
             what = f"{method} demosaic{wb}"
         self.lbl_cfa.setText(f"{what} — {said} (the CFA travels in the frame header). "
-                             f"ISP {self.isp.last_ms:.1f} ms/frame")
+                             f"every stage above is optional; all of them together cost "
+                             f"{self.isp.last_ms:.1f} ms of the {FRAME_BUDGET_MS:.0f} ms a "
+                             f"frame allows")
 
     def _to_display(self, img):
         """Raw frame -> uint8 for the view, through the ISP.
