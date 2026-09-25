@@ -77,8 +77,26 @@ the table.*
 | **Registers** | Both registers decoded field by field; firmware-owned fields grey |
 | **Device** | Every command sent and every reply, including `START`'s sampling-point report |
 
-Under the image is a log-scaled histogram of the raw 10-bit values, with the auto-contrast
-window shaded.
+Under the image is a log-scaled histogram of the raw 10-bit values, with the **display
+window** shaded: the two raw values that land on 0 and on 255 on screen. Its low end is the
+black level, or the auto-contrast floor when that is higher; its high end is full scale, or
+the auto-contrast ceiling. Everything outside the shading is clipped, and the shading is the
+only honest way to see that.
+
+!!! note "It used to lie, and the lie was invisible"
+    The window was measured on the ISP's *output* — after the black level and the white
+    balance — and then drawn against an axis of raw values. With a black level of 170 DN and
+    a blue gain of 1.4, the shading sat a couple of hundred DN to the left of the pixels it
+    claimed to describe. Worse, the auto-contrast percentiles were taken with a stride of 2
+    over the mosaic, which lands on a single Bayer site: on the colour sensor the automatic
+    contrast was set by the blue pixels alone. Both are fixed; the window is now decided on
+    the raw mosaic, over all four sites, and the pipeline is told to honour it.
+
+    Green passes through white balance at gain 1.0, so a green pixel at the top of the
+    window comes out at exactly 255. Red and blue land wherever their gains put them, and
+    with the saturation matrix on, a green pixel reaches 246 rather than 255 because the
+    matrix mixes a little red and blue back out of it. That is the matrix working, not the
+    window slipping.
 
 <figure markdown>
 ![The whole control panel](images/gui-panel.png){ width="330" }

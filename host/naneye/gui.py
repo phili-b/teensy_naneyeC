@@ -620,8 +620,17 @@ class MainWindow(QtWidgets.QMainWindow):
     def _to_display(self, img):
         """Raw frame -> uint8 for the view, through the ISP.
 
-        Auto contrast is a stretch of the linear image before gamma, so it works the same
-        in both modes and does not fight the tone curve.
+        Returns the image and the **display window in raw units**: the two raw values that
+        land on 0 and on 255 on screen. The histogram bins raw values, so a window measured
+        anywhere else would be drawn against the wrong axis -- which is what it used to do,
+        taking its numbers from the ISP's output, black level and white balance included.
+
+        So the window is decided here, on the mosaic, and the pipeline is told to honour it:
+        the low end is the black level (or the auto-contrast floor, whichever is higher),
+        and the stretch is applied to the linear image, which is the same thing shifted by
+        the black level. Green carries gain 1.0 through white balance, so the two agree
+        exactly; red and blue are then scaled by their gains, which is white balance doing
+        its job rather than the window being wrong.
         """
         full = 1023.0 if img.dtype == np.uint16 else 255.0
         self.isp.white = full
@@ -632,16 +641,23 @@ class MainWindow(QtWidgets.QMainWindow):
         elif not self.isp.demosaic:
             self.isp.gains = (1.0, 1.0, 1.0)
         t0 = time.perf_counter()
+        black = float(self.isp.black_level)
         if self.auto_contrast:
-            lin = self.isp.linear(img)                  # the ISP's own buffer
-            lo, hi = (float(v) for v in np.percentile(lin[::2, ::2], [0.5, 99.5]))
-            hi = max(hi, lo + 1.0)
-            np.subtract(lin, lo, out=lin)
-            np.multiply(lin, full / (hi - lo), out=lin)
-            out = self.isp.apply_curve(lin)
+            # Every seventh pixel, flat: a 2-D stride of 2 would land on one Bayer site and
+            # measure a single colour, so on the colour sensor the window followed blue.
+            lo, hi = (float(v) for v in
+                      np.percentile(img.reshape(-1)[::7], [0.5, 99.5]))
         else:
             lo, hi = 0.0, full
-            out = self.isp.process(img)
+        lo = max(lo, black)              # below the black level nothing reaches the screen
+        hi = max(hi, lo + 1.0)
+        lin = self.isp.linear(img)       # (raw - black) * gain, the ISP's own buffer
+        # Always, even when the window is the whole range: skipping it would leave the top
+        # of the display unused by exactly the black level, so raw 1023 would come out at
+        # 230 rather than 255 and the window would be claiming something untrue again.
+        np.subtract(lin, lo - black, out=lin)
+        np.multiply(lin, full / (hi - lo), out=lin)
+        out = self.isp.apply_curve(lin)
         self.isp.last_ms = (time.perf_counter() - t0) * 1000.0
         return np.ascontiguousarray(out), (lo, hi)
 

@@ -35,7 +35,11 @@ IDENTITY = np.eye(3, dtype=np.float32)
 SATURATION = np.array([[1.35, -0.25, -0.10],
                        [-0.20, 1.45, -0.25],
                        [-0.10, -0.35, 1.45]], np.float32)
-MATRICES = {"none": IDENTITY, "saturation": SATURATION}
+
+CALIBRATED = np.array([[1.6052, 0.0689, -0.7889],
+                       [-0.6299, 1.9073, -0.6755],
+                       [-0.5762, -0.2717, 1.2764]], np.float32)
+MATRICES = {"none": IDENTITY, "saturation": SATURATION, "calibrated": CALIBRATED}
 
 GAMMAS = {"1.0 (linear)": 1.0, "1.8": 1.8, "2.2": 2.2, "sRGB": None}
 WHITE = 1023.0

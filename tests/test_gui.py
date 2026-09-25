@@ -262,3 +262,68 @@ def test_the_camera_comes_up_on_the_bench_defaults():
     assert win.defaults_sent and win.sliders[0].field_value() == 60
     assert not src.device.sent
     win.close()
+
+
+def _window_maps_to_screen(win, raw):
+    """The contract: the window is two raw values, and they land on 0 and 255 on screen."""
+    shown, (lo, hi) = win._to_display(raw)
+    grey = shown if shown.ndim == 2 else shown[..., 1]      # green carries gain 1.0
+    at_lo = grey[raw == int(round(lo))]
+    at_hi = grey[raw == int(round(hi))]
+    return lo, hi, at_lo, at_hi
+
+
+def test_the_histogram_window_is_in_raw_units():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    win = gui.MainWindow(_RecordingSource(), 12375000)
+    app.processEvents()          # run the queued start-up while the window is still alive
+    win.sw_mono.setChecked(True)
+    win.gamma_box.setCurrentIndex(0)                 # linear, so the maths is checkable
+    win.black.setValue(100)
+
+    raw = np.arange(0, 1024, dtype=np.uint16).reshape(32, 32)
+    win.chk_auto.setChecked(False)
+    lo, hi, at_lo, at_hi = _window_maps_to_screen(win, raw)
+    # The black level is the bottom of the window: it used to claim 0 while the ISP was
+    # crushing everything below 100 DN to black.
+    assert (lo, hi) == (100.0, 1023.0)
+    assert at_lo.max() == 0 and at_hi.min() == 255
+    assert win._to_display(raw)[0][raw < 100].max() == 0
+
+    win.chk_auto.setChecked(True)
+    lo, hi, at_lo, at_hi = _window_maps_to_screen(win, raw)
+    assert 100.0 <= lo < hi <= 1023.0
+    assert at_lo.max() == 0 and at_hi.min() == 255
+    # And the window follows the data, not the ISP's output: a frame that only spans
+    # 400..600 DN must give a window inside those bounds.
+    narrow = np.linspace(400, 600, 1024).astype(np.uint16).reshape(32, 32)
+    _, (lo, hi) = win._to_display(narrow)
+    assert 395 <= lo <= 420 and 580 <= hi <= 605, (lo, hi)
+    win.close()
+
+
+def test_the_window_is_the_same_whatever_the_white_balance_does():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    win = gui.MainWindow(_RecordingSource(), 12375000)
+    app.processEvents()
+    win.black.setValue(0)
+    win.chk_auto.setChecked(True)
+    win.sw_rgb.setChecked(True)
+    from naneye import color
+
+    raw = np.linspace(100, 900, 1024).astype(np.uint16).reshape(32, 32)
+    raw[color.masks("BGGR", raw.shape)["B"]] //= 2       # a heavy blue cast for grey world
+
+    win.wb_box.setCurrentIndex(0)                        # as measured
+    _, plain = win._to_display(raw)
+    win.wb_box.setCurrentIndex(2)                        # grey world, every frame
+    _, balanced = win._to_display(raw)
+    assert win.isp.gains[2] > 1.5                        # blue really is being lifted
+    assert plain == balanced                             # and the window did not move
+
+    # It is the frame's own percentiles, in raw units, over all four Bayer sites: a stride
+    # that lands on one of them would measure a single colour (blue, here).
+    want = np.percentile(raw.reshape(-1)[::7], [0.5, 99.5])
+    assert plain == pytest.approx(tuple(want), abs=1.0)
+    assert plain[1] > 800, plain                         # not the halved blue channel alone
+    win.close()
