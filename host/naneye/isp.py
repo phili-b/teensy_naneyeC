@@ -71,7 +71,7 @@ LUMA_SIGMA = 24.0   # DN: how far a neighbour may differ and still be averaged i
 # Unsharp masking on luma only, so it cannot introduce colour fringes.
 SHARPEN_AMOUNTS = {"off": 0.0, "light": 0.4, "medium": 0.8, "strong": 1.4}
 CLIP_AT = 0.99     # fraction of a channel's own ceiling at which it counts as clipped
-KNEE = 0.80         # where the desaturation starts, as a fraction of the ceiling
+KNEE = 0.5         # where the desaturation starts, as a fraction of the ceiling
 BLOCK = 16          # the coarse grid the local hue is measured on
 MIN_SAMPLES = 6     # unclipped pixels a block needs before its colour is trusted
 SAMPLE = 4          # ... counted on every SAMPLE-th pixel, in each direction
