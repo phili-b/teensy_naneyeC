@@ -244,7 +244,7 @@ def test_the_camera_comes_up_on_the_bench_defaults():
     assert win.cfa_box.currentData() == "BGGR" and win.isp.pattern == "BGGR"
     assert win.black.value() == 170 and win.isp.black_level == 170
     assert win.wb_box.currentData() == "auto"
-    assert win.ccm_box.currentData() == "saturation" and win.isp.matrix == "saturation"
+    assert win.ccm_box.currentData() == "calibrated" and win.isp.matrix == "calibrated"
     assert win.gamma_box.currentData() is None and win.isp.gamma is None   # sRGB
     assert win.clock.currentData() == 12375000
 
@@ -339,6 +339,7 @@ def test_the_highlight_switch_reaches_the_isp():
     raw[color.masks("BGGR", raw.shape)["B"]] //= 2   # a blue cast, so grey world has work
     raw[8:12, 8:12] = 1023                        # and a blown patch, neutral at the top
     win.sw_rgb.setChecked(True)
+    win.hl_box.setCurrentIndex(win.hl_box.findData("reconstruct"))   # the bench default is "white"
     win.wb_box.setCurrentIndex(2)                 # grey world, so the gains differ
     win.ccm_box.setCurrentIndex(1)                # and the matrix mixes them further
     win.denoise_box.setCurrentIndex(0)            # and nothing else in the way

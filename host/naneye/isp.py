@@ -21,7 +21,6 @@ correction, local tone mapping. None of them would make a measurement more true.
 """
 
 from __future__ import annotations
-from numpy._typing._nbit_base import _32Bit
 
 import time
 
@@ -29,7 +28,8 @@ import numpy as np
 
 from . import color
 
-IDENTITY: np.ndarray[np.floating[_32Bit]] = np.eye(3, dtype=np.float32)
+# A colour matrix taken from a colour chart is a calibration; "none" is the honest identity.
+IDENTITY = np.eye(3, dtype=np.float32)
 
 SATURATION = np.array([[1.35, -0.25, -0.10],
                        [-0.20, 1.45, -0.25],
@@ -97,10 +97,10 @@ class Isp:
     """
 
     def __init__(self, pattern: str = "BGGR", black_level: float = 0.0,
-                 gains=(1.0, 1.0, 1.0), matrix: str = "calibrated", gamma=2.2,
+                 gains=(1.0, 1.0, 1.0), matrix: str = "none", gamma=2.2,
                  white: float = WHITE, saturation: float = SATURATED,
-                 highlights: str = "white", method: str = "malvar",
-                 denoise: str = "chroma", sharpen: str = "light"):
+                 highlights: str = "reconstruct", method: str = "malvar",
+                 denoise: str = "off", sharpen: str = "off"):
         self._pattern = pattern
         self._black = float(black_level)
         self._gains = tuple(float(g) for g in gains)
@@ -136,7 +136,7 @@ class Isp:
             self._lut = gamma_lut(self._gamma, size=1024)
         if shape:
             self._ready = False
-        self._ccm = MATRICES.get(self._matrix, CALIBRATED)
+        self._ccm = MATRICES.get(self._matrix, IDENTITY)
         self._identity_ccm = np.array_equal(self._ccm, IDENTITY)
 
     pattern = property(lambda s: s._pattern,
@@ -149,7 +149,7 @@ class Isp:
 
     def _rebuild(self):
         self._lut = gamma_lut(self._gamma, size=1024)
-        self._ccm = MATRICES.get(self._matrix, CALIBRATED)
+        self._ccm = MATRICES.get(self._matrix, IDENTITY)
         self._identity_ccm = np.array_equal(self._ccm, IDENTITY)
         self._gain_dirty = True
         self._ready = False
@@ -192,6 +192,7 @@ class Isp:
         self._idx = np.empty(shape + (3,), np.uint16)
         self._n = np.empty(shape + (3,), np.float32)       # channel / its own ceiling
         self._clip = np.empty(shape + (3,), bool)
+        self._surv = np.empty(shape + (3,), np.float32)
         self._whole = np.empty(shape, bool)
         self._y = np.empty(shape, np.float32)
         self._c = np.empty(shape, np.float32)
@@ -346,7 +347,10 @@ class Isp:
         n, clip = self._n, self._clip
         np.divide(rgb, self._ceil, out=n)
         np.greater_equal(n, CLIP_AT, out=clip)
-        hurt = clip.any(axis=2)
+        hurt = self._whole
+        np.logical_or(clip[..., 0], clip[..., 1], out=hurt)
+        np.logical_or(hurt, clip[..., 2], out=hurt)
+        # (slice logic, not .any(axis=2): a reduction over a length-3 axis is the slow way)
         sel = np.flatnonzero(hurt.reshape(-1))
         if sel.size == 0:
             return                       # nothing ran out: the ordinary case, and cheap
@@ -361,7 +365,7 @@ class Isp:
             usable = (kept > 0) & (kept < 3)
             if usable.any():
                 b, (h, w) = self._block, self._shape
-                whole = np.logical_not(hurt, out=self._whole)
+                whole = np.logical_not(hurt)
                 # Every SAMPLE-th pixel is plenty for a colour that is about to be averaged
                 # over a whole block, and it makes this the cheap part instead of the
                 # expensive one.
@@ -395,21 +399,34 @@ class Isp:
         # corrected interpolation moves interpolated values either side of any line you
         # draw, so a mask always has holes. A smooth function of the brightness cannot.
         np.divide(rgb, self._ceil, out=n)
+        drive, mx = self._y, self._c
         if self.highlights == "reconstruct":
             # Driven by the channels that survived, so a warm highlight with headroom in
             # green keeps its warmth; where nothing survived, by the brightest channel, so
             # the pixel still ends neutral.
-            drive = np.max(n * np.logical_not(clip), axis=2)
-            np.copyto(drive, np.max(n, axis=2), where=clip.all(axis=2))
+            np.copyto(self._surv, n)
+            self._surv[clip] = 0.0
+            self._max3(self._surv, drive)
+            self._max3(n, mx)
+            gone = np.logical_and(clip[..., 0], clip[..., 1])
+            np.logical_and(gone, clip[..., 2], out=gone)
+            np.copyto(drive, mx, where=gone)
         else:
-            drive = np.max(n, axis=2)                      # clip to white: purely brightness
+            self._max3(n, drive)                           # clip to white: purely brightness
         np.subtract(drive, KNEE, out=drive)
         np.multiply(drive, 1.0 / (1.0 - KNEE), out=drive)
         np.clip(drive, 0.0, 1.0, out=drive)
-        mx = np.max(rgb, axis=2)
+        self._max3(rgb, mx)
         np.subtract(mx[..., None], rgb, out=n)             # reuse n as scratch
         np.multiply(n, drive[..., None], out=n)
         np.add(rgb, n, out=rgb)
+
+    @staticmethod
+    def _max3(a: np.ndarray, out: np.ndarray) -> None:
+        """Per-pixel maximum of the three channels; two slice maxima beat an axis reduction
+        over a length-3 axis several times over."""
+        np.maximum(a[..., 0], a[..., 1], out=out)
+        np.maximum(out, a[..., 2], out=out)
 
     def apply_curve(self, lin: np.ndarray) -> np.ndarray:
         """Gamma-curve a linear float32 image (raw units) into 8-bit.
