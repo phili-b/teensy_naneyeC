@@ -105,5 +105,5 @@ uv sync --group docs
 uv run mkdocs serve      # http://127.0.0.1:8000
 ```
 
-The site is published to <https://fiepfiep.github.io/teensy_naneyeC/> on every push that
+The site is published to <https://naneye.baetens.de/> on every push that
 touches the docs.

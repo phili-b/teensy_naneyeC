@@ -2,7 +2,7 @@
 [![Platform: Teensy](https://img.shields.io/badge/Platform-Teensy-blue.svg)](https://www.pjrc.com/store/teensy40.html)
 [![Sensor: NanEyeC](https://img.shields.io/badge/Sensor-NanEyeC-orange.svg)](https://ams.com/)
 [![Language: C++](https://img.shields.io/badge/Language-C++-00599C.svg?logo=c%2B%2B&logoColor=white)](https://isocpp.org/)
-[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live-brightgreen.svg?logo=github&logoColor=white)](https://phili-b.github.io/teensy_naneyeC/)
+[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live-brightgreen.svg?logo=github&logoColor=white)](https://naneye.baetens.de/)
 [![Logic Analyzer: Saleae](https://img.shields.io/badge/Logic%20Analyzer-Saleae-00A9E0.svg?logo=saleae&logoColor=white)](https://www.saleae.com/)
 # Teensy NanEyeC
 
@@ -21,7 +21,7 @@ the hardware: see [How this was built with Claude](docs/built-with-claude.md).
 
 **New here?** Follow [Getting started](docs/getting-started.md): parts, wiring, flashing
 and your first image, with a troubleshooting table. The full documentation is published at
-<https://phili-b.github.io/teensy_naneyeC/>. [spec.md](spec.md) is the living design
+<https://naneye.baetens.de/>. [spec.md](spec.md) is the living design
 record: decisions, measured ground truth, milestones and risks.
 
 ![The bench setup: Teensy 4.1 on a breadboard wired to the NanoBerry board](docs/images/bench-setup.jpg)
@@ -34,7 +34,7 @@ uv sync --group docs
 uv run mkdocs serve      # http://127.0.0.1:8000
 ```
 
-It is published to <https://phili-b.github.io/teensy_naneyeC/> by
+It is published to <https://naneye.baetens.de/> by
 `.github/workflows/docs.yml` on every push that touches the docs.
 
 ## Status
