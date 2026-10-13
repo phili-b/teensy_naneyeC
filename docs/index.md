@@ -10,6 +10,11 @@ Frames keep the sensor's full 10-bit resolution, and what is recorded is always 
 mosaic, never a processed picture. Every frame carries its own exposure,
 clock and error counters, and a lost or damaged frame is always reported, never hidden.
 
+![The NanEyeC on the tip of its flex, a black cube about a millimetre across, with a lit white LED either side of it](images/sensor-head.jpg){ width="360" }
+
+*The camera itself: the black cube at the tip of the flex is the NanEyeC, about a millimetre
+across, with an LED lit on either side of it.*
+
 ![The bench setup: Teensy 4.1 on a breadboard wired to the NanoBerry board, with a Saleae logic analyser](images/bench-setup.jpg)
 
 *The bench: the Teensy 4.1 (green, left) on a breadboard, wired to the NanoBerry board (black,

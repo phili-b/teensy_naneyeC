@@ -1,8 +1,8 @@
 site_name: NanEyeC on Teensy 4.1
 site_description: Streaming a NanEyeC miniature camera to a PC over USB via a Teensy 4.1
 site_url: https://naneye.baetens.de/
-repo_url: https://github.com/fiepfiep/teensy_naneyeC
-repo_name: fiepfiep/teensy_naneyeC
+repo_url: https://github.com/phili-b/teensy_naneyeC
+repo_name: phili-b/teensy_naneyeC
 edit_uri: edit/main/docs/
 docs_dir: docs
 use_directory_urls: false

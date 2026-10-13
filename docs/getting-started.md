@@ -45,7 +45,7 @@ The [photo on the hardware page](hardware.md#the-bench-in-the-photo) shows a wor
 ## 3. Get the code and flash the Teensy
 
 ```bash
-git clone https://github.com/fiepfiep/teensy_naneyeC.git
+git clone https://github.com/phili-b/teensy_naneyeC.git
 cd teensy_naneyeC
 uv sync                                                        # Python environment
 uv run --group firmware python -m platformio run -d firmware -t upload
